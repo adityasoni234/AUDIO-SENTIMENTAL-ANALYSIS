@@ -1,0 +1,98 @@
+/* ── Profile ─────────────────────────────────────────────────── */
+.profile__container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 560px;
+}
+
+/* Hero / avatar */
+.profile__hero {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+}
+.profile__avatar {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-accent), #818cf8);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: 800;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(99,102,241,0.3);
+}
+.profile__hero-info { flex: 1; min-width: 0; }
+.profile__display-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile__email {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  margin-top: 3px;
+}
+
+/* Details card */
+.profile__details-card { display: flex; flex-direction: column; gap: 0; }
+.profile__section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 16px;
+}
+.profile__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.profile__field:last-of-type { border-bottom: none; }
+.profile__field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.profile__field-value {
+  font-size: 14px;
+  color: var(--color-text-primary);
+  font-weight: 500;
+  padding-left: 2px;
+}
+.profile__field-value--mono {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-section-bg);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  word-break: break-all;
+  margin-top: 2px;
+}
+
+/* Logout card */
+.profile__logout-card { display: flex; flex-direction: column; gap: 12px; }
+.profile__logout-desc {
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}

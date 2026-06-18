@@ -1,0 +1,70 @@
+/* ── UploadAudio ─────────────────────────────────────────────── */
+.upload-page__container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 640px;
+}
+.upload-page__card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+}
+.upload-page__progress {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.upload-page__progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.upload-page__progress-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.upload-page__progress-pct {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+.upload-page__progress-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.upload-page__actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.upload-page__tips {
+  background: var(--color-section-bg);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+}
+.upload-page__tips-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 12px;
+}
+.upload-page__tips-list {
+  list-style: disc;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.upload-page__tips-list li {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
