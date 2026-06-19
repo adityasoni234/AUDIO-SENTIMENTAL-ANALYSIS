@@ -44,6 +44,15 @@ CACHE_PATH    = os.path.join(os.path.dirname(__file__), 'models', 'features_cach
 
 # ── Audio helpers ──────────────────────────────────────────────────────────────
 
+def _find_ffmpeg():
+    for candidate in ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']:
+        if os.path.isfile(candidate):
+            return candidate
+    result = subprocess.run(['which', 'ffmpeg'], capture_output=True, text=True)
+    return result.stdout.strip() or None
+
+_FFMPEG = _find_ffmpeg()
+
 def _load_wav(path):
     try:
         y, sr = sf.read(path, dtype='float32', always_2d=False)
@@ -53,10 +62,12 @@ def _load_wav(path):
             y = resample_poly(y, frac.numerator, frac.denominator).astype(np.float32)
         return y
     except Exception:
+        if not _FFMPEG:
+            raise RuntimeError(f"Cannot read {path}: soundfile failed and ffmpeg not found. Install: brew install ffmpeg")
         tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
         tmp.close()
         try:
-            subprocess.run(['ffmpeg','-y','-i',path,'-ac','1','-ar',str(TARGET_SR),tmp.name],
+            subprocess.run([_FFMPEG,'-y','-i',path,'-ac','1','-ar',str(TARGET_SR),tmp.name],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             y, _ = sf.read(tmp.name, dtype='float32')
             return y
