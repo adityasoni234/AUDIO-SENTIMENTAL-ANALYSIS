@@ -1,20 +1,33 @@
 """
 Training Script — Depression Detection (DAIC-WOZ)
-Target: ≥ 90% accuracy
 
-Speed optimisations vs v1:
-  - No augmentation (wav2vec2 features are robust enough)
-  - Features cached to disk (re-run is instant)
-  - Batched wav2vec2 inference (faster on CPU)
-  - Larger hop → fewer segments per file
-  - GradientBoosting (pure sklearn, no libomp needed)
+Pipeline (matches project specification):
+  1. Data Collection      — Extended DAIC-WOZ, PHQ-8 labels
+  2. Preprocessing        — resample 16kHz, normalize, VAD, bandpass, spectral subtraction
+  3. Segmentation         — 7s overlapping segments (5–10 s range)
+  4. Annotation/Labeling  — PHQ-8 ≥ 10 → Depressed (1), else Non-Depressed (0)
+  5. wav2vec 2.0 features — prosodic/rhythm/energy/emotion patterns (1536-dim) on MPS/GPU
+  6. Model Training       — Random Forest + GradientBoosting (best by LOPO-F1)
+  7. Depression Prediction— Depressed | Non-Depressed
+  8. Model Evaluation     — Accuracy, Precision, Recall, F1-score, ROC-AUC
+
+Features are cached to disk — safe to interrupt and resume.
 
 Usage:
-    python train.py --dataset ./dataset --labels ./dataset/labels.csv
+    python3 train.py
+    python3 train.py --dataset /path/to/audio --labels /path/to/labels.csv
 """
 
-import argparse, os, warnings
-warnings.filterwarnings('ignore')
+import argparse
+import os
+import sys
+import warnings
+warnings.filterwarnings("ignore")
+
+# Prevent thread conflicts on Apple Silicon; enable MPS fallback for unsupported ops
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import numpy as np
 import pandas as pd
@@ -28,89 +41,145 @@ from sklearn.metrics import (
     f1_score, roc_auc_score, classification_report, confusion_matrix,
 )
 import soundfile as sf
-import subprocess, tempfile
+import subprocess
+import tempfile
 from scipy.signal import butter, sosfilt, resample_poly
-from scipy.fft import fft, ifft
+from scipy.fft import fft, ifft, rfft, irfft
 from fractions import Fraction
+
+# ── Constants ─────────────────────────────────────────────────────────────────
 
 TARGET_SR     = 16000
 PHQ_THRESHOLD = 10
 SEG_SEC       = 7
-HOP_SEC       = 4        # larger hop = fewer segments = faster
+HOP_SEC       = 2
 MIN_SEG_SEC   = 3
-BATCH_SIZE    = 8        # wav2vec batching
-MODEL_PATH    = os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib')
-CACHE_PATH    = os.path.join(os.path.dirname(__file__), 'models', 'features_cache.joblib')
+MODEL_PATH    = os.path.join(os.path.dirname(__file__), "models", "depression_model.joblib")
+CACHE_PATH    = os.path.join(os.path.dirname(__file__), "models", "features_cache.npz")
 
-# ── Audio helpers ──────────────────────────────────────────────────────────────
+DEFAULT_DATASET = "/Users/ieeesbmac1/Desktop/DAIC-WOZ-Dataset/audio"
+DEFAULT_LABELS  = "/Users/ieeesbmac1/Desktop/DAIC-WOZ-Dataset/labels.csv"
 
-def _find_ffmpeg():
-    for candidate in ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']:
-        if os.path.isfile(candidate):
-            return candidate
-    result = subprocess.run(['which', 'ffmpeg'], capture_output=True, text=True)
-    return result.stdout.strip() or None
+# ── Step 1: Audio loading ──────────────────────────────────────────────────────
 
-_FFMPEG = _find_ffmpeg()
-
-def _load_wav(path):
+def _load_wav(path: str) -> np.ndarray:
+    """Load any audio → 16kHz mono float32. Falls back to ffmpeg."""
     try:
-        y, sr = sf.read(path, dtype='float32', always_2d=False)
-        if y.ndim > 1: y = y.mean(axis=1)
+        y, sr = sf.read(path, dtype="float32", always_2d=False)
+        if y.ndim > 1:
+            y = y.mean(axis=1)
         if sr != TARGET_SR:
             frac = Fraction(TARGET_SR, sr).limit_denominator(200)
             y = resample_poly(y, frac.numerator, frac.denominator).astype(np.float32)
         return y
     except Exception:
-        if not _FFMPEG:
-            raise RuntimeError(f"Cannot read {path}: soundfile failed and ffmpeg not found. Install: brew install ffmpeg")
-        tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         tmp.close()
         try:
-            subprocess.run([_FFMPEG,'-y','-i',path,'-ac','1','-ar',str(TARGET_SR),tmp.name],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            y, _ = sf.read(tmp.name, dtype='float32')
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", path, "-ac", "1", "-ar", str(TARGET_SR), tmp.name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+            )
+            y, _ = sf.read(tmp.name, dtype="float32")
             return y
         finally:
             try: os.remove(tmp.name)
             except: pass
 
-def _normalize(y): return y / (np.max(np.abs(y)) + 1e-9) * 0.95
 
-def _bandpass(y, lo=300, hi=3400, order=4):
+# ── Step 2: Noise-Robust Preprocessing ────────────────────────────────────────
+
+def _normalize(y: np.ndarray) -> np.ndarray:
+    peak = np.max(np.abs(y))
+    return y / (peak + 1e-9) * 0.95 if peak > 1e-9 else y
+
+
+def _vad_mask(y: np.ndarray, frame_ms=20, threshold_db=-40.0) -> np.ndarray:
+    """Energy-based Voice Activity Detection — returns boolean sample mask."""
+    frame_len = int(TARGET_SR * frame_ms / 1000)
+    hop_len   = frame_len // 2
+    n_frames  = 1 + (len(y) - frame_len) // hop_len
+    mask = np.zeros(len(y), dtype=bool)
+    for i in range(n_frames):
+        s = i * hop_len
+        rms_db = 20 * np.log10(np.sqrt(np.mean(y[s:s+frame_len]**2)) + 1e-9)
+        if rms_db >= threshold_db:
+            mask[s:s+frame_len] = True
+    return mask
+
+
+def _trim_silence(y: np.ndarray, min_silence_ms=300) -> np.ndarray:
+    """Clinically-aware silence trim — preserves short pauses (<300 ms)."""
+    mask      = _vad_mask(y)
+    min_samp  = int(TARGET_SR * min_silence_ms / 1000)
+    in_sil, sil_start = False, 0
+    for i in range(len(mask)):
+        if not mask[i] and not in_sil:
+            in_sil, sil_start = True, i
+        elif mask[i] and in_sil:
+            in_sil = False
+            if i - sil_start < min_samp:
+                mask[sil_start:i] = True
+    voiced = y[mask]
+    return voiced if len(voiced) > TARGET_SR * 0.1 else y
+
+
+def _bandpass(y: np.ndarray, lo=300, hi=3400, order=4) -> np.ndarray:
+    """Band-pass filter 300–3400 Hz (telephony band)."""
     nyq = TARGET_SR / 2
-    sos = butter(order, [lo/nyq, hi/nyq], btype='band', output='sos')
+    sos = butter(order, [lo / nyq, hi / nyq], btype="band", output="sos")
     return sosfilt(sos, y).astype(np.float32)
 
-def _denoise(y, noise_frames=8, alpha=1.5):
+
+def _noise_suppress(y: np.ndarray, noise_frames=10, alpha=2.0) -> np.ndarray:
+    """Vectorized spectral subtraction — processes all frames at once via matrix FFT."""
+    from scipy.fft import rfft, irfft
     n_fft = 512; hop = n_fft // 2
+    win   = np.hanning(n_fft).astype(np.float32)
     n_frames = (len(y) - n_fft) // hop + 1
-    if n_frames < noise_frames + 2: return y
-    noise_pow = np.zeros(n_fft//2+1)
-    for i in range(noise_frames):
-        frame = y[i*hop:i*hop+n_fft] * np.hanning(n_fft)
-        noise_pow += np.abs(fft(frame, n=n_fft)[:n_fft//2+1])**2
-    noise_pow /= noise_frames
-    out = np.zeros(len(y))
-    n_frames2 = (len(y) - n_fft) // hop + 1
-    for i in range(n_frames2):
+    if n_frames < noise_frames + 1:
+        return y
+
+    # Stack all frames into a matrix (n_frames, n_fft)
+    idx    = np.arange(n_fft) + np.arange(n_frames)[:, None] * hop
+    frames = y[idx] * win  # (n_frames, n_fft)
+
+    # Batch FFT
+    specs  = rfft(frames, n=n_fft, axis=1)       # (n_frames, n_fft//2+1)
+    mag    = np.abs(specs)
+    phase  = np.angle(specs)
+
+    # Noise estimate from first frames
+    noise_pow = (mag[:noise_frames] ** 2).mean(axis=0)
+
+    # Spectral subtraction
+    clean_sq  = np.maximum(mag**2 - alpha * noise_pow, 0)
+    clean_mag = np.sqrt(clean_sq)
+    clean_specs = clean_mag * np.exp(1j * phase)
+
+    # Batch IFFT + overlap-add
+    clean_frames = irfft(clean_specs, n=n_fft, axis=1) * win  # (n_frames, n_fft)
+    output = np.zeros(len(y), dtype=np.float32)
+    for i in range(n_frames):
         s = i * hop
-        frame = y[s:s+n_fft] * np.hanning(n_fft)
-        spec = fft(frame, n=n_fft)
-        mag = np.abs(spec); phase = np.angle(spec)
-        clean_sq = np.maximum(mag[:n_fft//2+1]**2 - alpha*noise_pow, 0)
-        clean_mag = np.sqrt(clean_sq)
-        full = np.concatenate([clean_mag, clean_mag[-2:0:-1]])
-        out[s:s+n_fft] += np.real(ifft(full * np.exp(1j*phase))) * np.hanning(n_fft)
-    return out.astype(np.float32)
+        output[s:s + n_fft] += clean_frames[i]
+    return output.astype(np.float32)
 
-def preprocess(y):
-    y = _normalize(y)
-    y = _bandpass(y)
-    y = _denoise(y)
-    return _normalize(y)
 
-def make_segments(y):
+def preprocess(y: np.ndarray) -> np.ndarray:
+    """Full 6-step noise-robust preprocessing pipeline."""
+    y = _normalize(y)        # Step 1: Amplitude normalization
+    y = _trim_silence(y)     # Step 2: VAD + clinically-aware silence trim
+    y = _bandpass(y)         # Step 3: Band-pass 300–3400 Hz
+    y = _noise_suppress(y)   # Step 4: Adaptive noise suppression
+    y = _normalize(y)        # Step 5: Re-normalize after suppression
+    return y
+
+
+# ── Step 3: Speech Segmentation ───────────────────────────────────────────────
+
+def make_segments(y: np.ndarray) -> list:
+    """Split audio into overlapping 7s segments (5–10 s range)."""
     seg_len = TARGET_SR * SEG_SEC
     hop_len = TARGET_SR * HOP_SEC
     min_len = TARGET_SR * MIN_SEG_SEC
@@ -121,175 +190,314 @@ def make_segments(y):
             seg = np.pad(seg, (0, seg_len - len(seg)))
         segs.append(seg)
         start += hop_len
-    return segs or [np.pad(y, (0, max(0, seg_len-len(y))))]
+    return segs or [np.pad(y[:seg_len], (0, max(0, seg_len-len(y))))]
 
-# ── wav2vec 2.0 (batched) ──────────────────────────────────────────────────────
 
-_proc = _mdl = None
+# ── Augmentation ───────────────────────────────────────────────────────────────
+
+def augment(seg: np.ndarray) -> list:
+    """Return original + Gaussian noise + time-stretch variants."""
+    copies = [seg]
+    noisy = seg + np.random.randn(len(seg)).astype(np.float32) * 0.005
+    copies.append(_normalize(noisy))
+    stretched = resample_poly(seg, 9, 10).astype(np.float32)
+    stretched = stretched[:len(seg)] if len(stretched) >= len(seg) \
+                else np.pad(stretched, (0, len(seg)-len(stretched)))
+    copies.append(_normalize(stretched))
+    return copies
+
+
+# ── Step 5: wav2vec 2.0 Feature Learning (MPS/GPU accelerated) ────────────────
+
+_wav2vec_proc  = None
+_wav2vec_model = None
+_device        = None
+
+
+def _get_device():
+    import torch
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
 
 def _load_wav2vec():
-    global _proc, _mdl
-    if _proc is None:
-        from transformers import Wav2Vec2Processor, Wav2Vec2Model
+    global _wav2vec_proc, _wav2vec_model, _device
+    if _wav2vec_proc is None:
         import torch
-        print("  Loading facebook/wav2vec2-base (first time downloads ~360 MB)…")
-        _proc = Wav2Vec2Processor.from_pretrained('facebook/wav2vec2-base')
-        _mdl  = Wav2Vec2Model.from_pretrained('facebook/wav2vec2-base', use_safetensors=True)
-        _mdl.eval()
-    return _proc, _mdl
+        from transformers import Wav2Vec2Processor, Wav2Vec2Model
+        _device = _get_device()
+        print(f"  Loading facebook/wav2vec2-base on {_device}…")
+        _wav2vec_proc  = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base")
+        _wav2vec_model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base", use_safetensors=True)
+        _wav2vec_model = _wav2vec_model.to(_device)
+        _wav2vec_model.eval()
+        print(f"  wav2vec2 ready on {_device}")
+    return _wav2vec_proc, _wav2vec_model, _device
 
-def _batch_features(segments):
-    """Extract 1536-dim features for a list of segments in one batched pass."""
+
+def wav2vec_features(seg: np.ndarray) -> np.ndarray:
+    """
+    Extract wav2vec 2.0 hidden states on MPS/GPU capturing:
+    - Prosodic flattening
+    - Speech rhythm irregularities
+    - Vocal energy variations
+    - Emotional and cognitive speech patterns
+
+    Returns 1536-dim vector (mean + std pooling over time axis).
+    """
     import torch
-    proc, mdl = _load_wav2vec()
-    results = []
-    for i in range(0, len(segments), BATCH_SIZE):
-        batch = segments[i:i+BATCH_SIZE]
-        inputs = proc(batch, sampling_rate=TARGET_SR,
-                      return_tensors='pt', padding=True)
-        with torch.no_grad():
-            out = mdl(inputs.input_values)
-        h = out.last_hidden_state   # (B, T, 768)
-        # mean + std pooling → 1536-dim
-        feat = torch.cat([h.mean(dim=1), h.std(dim=1)], dim=1)
-        results.append(feat.numpy())
-    return np.vstack(results)   # (N, 1536)
+    proc, model, device = _load_wav2vec()
+    inp = proc(seg, sampling_rate=TARGET_SR, return_tensors="pt", padding=True)
+    input_values = inp.input_values.to(device)
+    with torch.no_grad():
+        out = model(input_values)
+    h = out.last_hidden_state.squeeze(0).cpu()   # (T, 768) back to CPU for numpy
+    return np.concatenate([
+        h.mean(dim=0).numpy(),
+        h.std(dim=0).numpy(),
+    ]).astype(np.float32)                         # (1536,)
 
-# ── Dataset builder with cache ─────────────────────────────────────────────────
 
-def build_dataset(dataset_dir, labels):
-    # Return cached features if available
+# ── Feature extraction with disk cache ────────────────────────────────────────
+
+def build_dataset(dataset_dir: str, labels: dict, augment_data=True):
+    """
+    Extract wav2vec 2.0 features for all participants.
+    Features are cached to models/features_cache.npz — safe to interrupt and resume.
+    Returns X (n_samples, 1536), y (n_samples,), pids (n_samples,)
+    """
+    os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+
+    # Pre-load wav2vec2 before any iteration (avoids crash inside tqdm loop)
+    _load_wav2vec()
+
+    # Load existing cache if available
+    cache = {}
     if os.path.exists(CACHE_PATH):
-        print("  Loading cached features…")
-        cached = joblib.load(CACHE_PATH)
-        return cached['X'], cached['y'], cached['pids']
+        data  = np.load(CACHE_PATH, allow_pickle=True)
+        X_c   = data["X"]
+        y_c   = data["y"]
+        p_c   = data["pids"]
+        for pid in np.unique(p_c):
+            mask = p_c == pid
+            cache[int(pid)] = (X_c[mask], y_c[mask])
+        print(f"  Loaded cache: {len(cache)} participants already processed")
 
-    files = sorted([f for f in os.listdir(dataset_dir) if f.endswith('.wav')])
-    X_all, y_all, pid_all = [], [], []
+    wav_files = sorted([f for f in os.listdir(dataset_dir) if f.lower().endswith(".wav")])
+    print(f"\nFound {len(wav_files)} audio files. Extracting features…")
 
-    print(f"\nProcessing {len(files)} participants…")
-    for fname in tqdm(files, desc='Participants'):
-        pid = int(fname.split('_')[0])
+    changed = False
+    for fname in tqdm(wav_files, desc="wav2vec2 features"):
+        try:
+            pid = int(fname.split("_")[0])
+        except ValueError:
+            continue
         if pid not in labels:
             continue
+        if pid in cache:
+            continue   # already cached
+
         label = labels[pid]
-        raw   = _load_wav(os.path.join(dataset_dir, fname))
-        clean = preprocess(raw)
-        segs  = make_segments(clean)
-        print(f"  [{pid}] label={label}  {len(segs)} segments")
+        try:
+            raw   = _load_wav(os.path.join(dataset_dir, fname))
+            clean = preprocess(raw)
+            segs  = make_segments(clean)
+        except Exception as e:
+            tqdm.write(f"  [SKIP] {pid} load/preprocess error: {e}")
+            continue
 
-        feats = _batch_features(segs)   # (n_segs, 1536)
-        X_all.append(feats)
-        y_all.extend([label] * len(segs))
-        pid_all.extend([pid] * len(segs))
+        X_pid, y_pid = [], []
+        for seg in segs:
+            variants = augment(seg) if augment_data else [seg]
+            for v in variants:
+                try:
+                    feat = wav2vec_features(v)
+                    X_pid.append(feat)
+                    y_pid.append(label)
+                except Exception as e:
+                    tqdm.write(f"  [WARN] {pid} feature error: {e}")
 
-    X = np.vstack(X_all)
-    y = np.array(y_all)
-    pids = np.array(pid_all)
+        if X_pid:
+            cache[pid] = (np.array(X_pid, dtype=np.float32), np.array(y_pid))
+            changed = True
 
-    os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
-    joblib.dump({'X': X, 'y': y, 'pids': pids}, CACHE_PATH)
-    print(f"  Features cached → {CACHE_PATH}")
-    return X, y, pids
+        # Save cache after every participant
+        if changed:
+            _save_cache(cache)
+            changed = False
 
-# ── Leave-One-Participant-Out evaluation ──────────────────────────────────────
+    return _flatten_cache(cache)
+
+
+def _save_cache(cache: dict):
+    X_all, y_all, p_all = _flatten_cache(cache)
+    np.savez_compressed(CACHE_PATH, X=X_all, y=y_all, pids=p_all)
+
+
+def _flatten_cache(cache: dict):
+    X_all, y_all, p_all = [], [], []
+    for pid, (X_p, y_p) in cache.items():
+        X_all.append(X_p)
+        y_all.extend(y_p)
+        p_all.extend([pid] * len(y_p))
+    if not X_all:
+        return np.array([]), np.array([]), np.array([])
+    return (np.vstack(X_all).astype(np.float32),
+            np.array(y_all),
+            np.array(p_all))
+
+
+# ── Step 8: Model Evaluation — Leave-One-Participant-Out CV ───────────────────
 
 def lopo_evaluate(X, y, pids, pipeline, name):
-    unique = np.unique(pids)
-    y_true, y_pred, y_prob = [], [], []
+    """
+    LOPO CV: train on all participants except one, predict that participant
+    via majority vote across their segments. Reports all 5 metrics.
+    """
+    unique_pids = np.unique(pids)
+    y_true_p, y_pred_p, y_prob_p = [], [], []
 
-    for pid in unique:
-        test  = pids == pid
-        train = ~test
-        pipeline.fit(X[train], y[train])
-        proba      = pipeline.predict_proba(X[test])[:, 1].mean()
-        pred_label = int(proba >= 0.5)
-        y_true.append(y[test][0])
-        y_pred.append(pred_label)
-        y_prob.append(proba)
+    for test_pid in tqdm(unique_pids, desc=f"LOPO {name}"):
+        test_mask  = pids == test_pid
+        train_mask = ~test_mask
+        if train_mask.sum() == 0:
+            continue
 
-    y_true, y_pred, y_prob = np.array(y_true), np.array(y_pred), np.array(y_prob)
+        pipeline.fit(X[train_mask], y[train_mask])
+        seg_probs  = pipeline.predict_proba(X[test_mask])[:, 1]
+        mean_prob  = seg_probs.mean()
+        pred_label = int(mean_prob >= 0.5)
 
-    acc  = accuracy_score(y_true, y_pred)
-    prec = precision_score(y_true, y_pred, zero_division=0)
-    rec  = recall_score(y_true, y_pred, zero_division=0)
-    f1   = f1_score(y_true, y_pred, zero_division=0)
-    try:    auc = roc_auc_score(y_true, y_prob)
-    except: auc = float('nan')
+        y_true_p.append(y[test_mask][0])
+        y_pred_p.append(pred_label)
+        y_prob_p.append(mean_prob)
 
-    print(f"\n{'─'*55}")
+    y_true_p = np.array(y_true_p)
+    y_pred_p = np.array(y_pred_p)
+    y_prob_p = np.array(y_prob_p)
+
+    acc  = accuracy_score(y_true_p, y_pred_p)
+    prec = precision_score(y_true_p, y_pred_p, zero_division=0)
+    rec  = recall_score(y_true_p, y_pred_p, zero_division=0)
+    f1   = f1_score(y_true_p, y_pred_p, zero_division=0)
+    try:
+        auc = roc_auc_score(y_true_p, y_prob_p)
+    except Exception:
+        auc = float("nan")
+
+    print(f"\n{'─'*58}")
     print(f"  {name}  —  Leave-One-Participant-Out CV")
-    print(f"{'─'*55}")
+    print(f"{'─'*58}")
     print(f"  Accuracy  : {acc*100:.2f}%")
     print(f"  Precision : {prec*100:.2f}%")
     print(f"  Recall    : {rec*100:.2f}%")
     print(f"  F1-Score  : {f1*100:.2f}%")
     print(f"  ROC-AUC   : {auc:.4f}")
     print()
-    print(classification_report(y_true, y_pred, target_names=['Non-Depressed','Depressed']))
-    print("Confusion Matrix (rows=actual, cols=predicted):")
-    print(confusion_matrix(y_true, y_pred))
+    print(classification_report(y_true_p, y_pred_p,
+                                target_names=["Non-Depressed", "Depressed"]))
+    print("Confusion Matrix:")
+    print(confusion_matrix(y_true_p, y_pred_p))
     return f1, acc
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+
+# ── Step 6: Model Building ────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='./dataset')
-    parser.add_argument('--labels',  default='./dataset/labels.csv')
-    parser.add_argument('--no-cache', action='store_true', help='Ignore cached features')
+    parser.add_argument("--dataset",  default=DEFAULT_DATASET)
+    parser.add_argument("--labels",   default=DEFAULT_LABELS)
+    parser.add_argument("--no-aug",   action="store_true", help="Skip augmentation")
+    parser.add_argument("--no-cache", action="store_true", help="Ignore existing feature cache")
     args = parser.parse_args()
+
+    if not os.path.isdir(args.dataset):
+        print(f"ERROR: Dataset not found: {args.dataset}")
+        sys.exit(1)
+    if not os.path.isfile(args.labels):
+        print(f"ERROR: Labels not found: {args.labels}")
+        sys.exit(1)
+
+    # Step 4: Load annotations
+    df     = pd.read_csv(args.labels)
+    labels = {int(r["Participant_ID"]): int(r["PHQ_Score"] >= PHQ_THRESHOLD)
+              for _, r in df.iterrows()}
+    dep    = sum(labels.values())
+    print(f"\n── Step 4: Data Annotation ──────────────────────────")
+    print(f"  Total participants : {len(labels)}")
+    print(f"  Depressed (PHQ≥10) : {dep}")
+    print(f"  Non-Depressed      : {len(labels)-dep}")
 
     if args.no_cache and os.path.exists(CACHE_PATH):
         os.remove(CACHE_PATH)
-        print("Cache cleared.")
+        print("  Feature cache cleared.")
 
-    df = pd.read_csv(args.labels)
-    labels = {int(r['Participant_ID']): int(r['PHQ_Score'] >= PHQ_THRESHOLD)
-              for _, r in df.iterrows()}
+    # Steps 2, 3, 5: Preprocess → Segment → Extract features
+    print(f"\n── Steps 2–5: Preprocessing → Segmentation → wav2vec2 ──")
+    X, y, pids = build_dataset(args.dataset, labels, augment_data=not args.no_aug)
 
-    dep = sum(labels.values())
-    print(f"Labels: {len(labels)} participants | Depressed: {dep} | Non-Depressed: {len(labels)-dep}")
+    if len(X) == 0:
+        print("ERROR: No features extracted.")
+        sys.exit(1)
 
-    X, y, pids = build_dataset(args.dataset, labels)
-    print(f"\nDataset: {len(X)} segments | Depressed: {(y==1).sum()} | Non-Depressed: {(y==0).sum()}")
+    print(f"\n  Total segments (with augmentation) : {len(X)}")
+    print(f"  Depressed segments                 : {(y==1).sum()}")
+    print(f"  Non-Depressed segments             : {(y==0).sum()}")
+    print(f"  Feature dimensionality             : {X.shape[1]}")
 
-    pos_weight = (y==0).sum() / max((y==1).sum(), 1)
+    # Step 6: Build models — Random Forest + GradientBoosting (pure sklearn, no OpenMP conflict)
+    print(f"\n── Step 6: Model Building ───────────────────────────")
 
     rf = Pipeline([
-        ('sc',  StandardScaler()),
-        ('clf', RandomForestClassifier(
-            n_estimators=500, max_depth=20, min_samples_leaf=1,
-            class_weight='balanced', random_state=42, n_jobs=-1,
+        ("sc",  StandardScaler()),
+        ("clf", RandomForestClassifier(
+            n_estimators=500, max_depth=15, min_samples_leaf=2,
+            class_weight="balanced", random_state=42, n_jobs=-1,
         )),
     ])
 
     gb = Pipeline([
-        ('sc',  StandardScaler()),
-        ('clf', GradientBoostingClassifier(
+        ("sc",  StandardScaler()),
+        ("clf", GradientBoostingClassifier(
             n_estimators=300, learning_rate=0.05, max_depth=5,
             subsample=0.8, random_state=42,
         )),
     ])
 
-    f1_rf, acc_rf = lopo_evaluate(X, y, pids, rf, 'Random Forest')
-    f1_gb, acc_gb = lopo_evaluate(X, y, pids, gb, 'Gradient Boosting')
+    # Step 8: Evaluate both with LOPO-CV
+    print(f"\n── Step 8: Model Evaluation (LOPO Cross-Validation) ──")
+    f1_rf, acc_rf = lopo_evaluate(X, y, pids, rf, "Random Forest")
+    f1_gb, acc_gb = lopo_evaluate(X, y, pids, gb, "GradientBoosting")
 
+    # Pick best by F1
     if f1_rf >= f1_gb:
-        best_name, best_pipe, best_acc = 'Random Forest', rf, acc_rf
+        best_name, best_pipe, best_acc, best_f1 = "Random Forest", rf, acc_rf, f1_rf
     else:
-        best_name, best_pipe, best_acc = 'Gradient Boosting', gb, acc_gb
+        best_name, best_pipe, best_acc, best_f1 = "GradientBoosting", gb, acc_gb, f1_gb
 
-    print(f"\n{'='*55}")
+    print(f"\n{'='*58}")
     print(f"  Best model : {best_name}")
     print(f"  Accuracy   : {best_acc*100:.2f}%")
-    print(f"{'='*55}\n")
+    print(f"  F1-Score   : {best_f1*100:.2f}%")
+    print(f"{'='*58}\n")
 
+    # Step 7: Fit final model on all data
+    print("Fitting final model on full dataset…")
     best_pipe.fit(X, y)
+
     os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
-    joblib.dump({'pipeline': best_pipe, 'model_name': best_name, 'accuracy': best_acc}, MODEL_PATH)
+    joblib.dump({
+        "pipeline":   best_pipe,
+        "model_name": best_name,
+        "accuracy":   best_acc,
+        "f1":         best_f1,
+    }, MODEL_PATH)
     print(f"Model saved → {MODEL_PATH}")
+    print("\nTraining complete. Start the Flask server with: python3 app.py")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
