@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Globe, Bell, Sun, AlertTriangle, LogOut } from 'lucide-react'
+import { Globe, Bell, Sun, AlertTriangle, LogOut, CheckCircle2, Loader2, XCircle, Cpu } from 'lucide-react'
+import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 import './Settings.css'
 
@@ -10,13 +11,59 @@ export default function Settings() {
 
   const [emailNotifications, setEmailNotifications] = useState(true)
   const [analysisAlerts, setAnalysisAlerts] = useState(false)
+  const [apiStatus, setApiStatus] = useState('checking') // checking | live | model-training | error
+  const [modelReady, setModelReady] = useState(false)
+
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+
+  useEffect(() => {
+    async function checkHealth() {
+      try {
+        const res = await axios.get(`${apiBaseUrl}/health`, { timeout: 4000 })
+        setModelReady(res.data.model_ready)
+        setApiStatus(res.data.model_ready ? 'live' : 'model-training')
+      } catch {
+        setApiStatus('error')
+      }
+    }
+    checkHealth()
+  }, [apiBaseUrl])
 
   async function handleLogout() {
     await logout()
     navigate('/login')
   }
 
-  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+  const statusBadge = () => {
+    switch (apiStatus) {
+      case 'checking':
+        return (
+          <span className="settings__status-badge settings__status-badge--checking">
+            <Loader2 size={12} className="settings__spin" /> Checking…
+          </span>
+        )
+      case 'live':
+        return (
+          <span className="settings__status-badge settings__status-badge--live">
+            <CheckCircle2 size={12} /> Connected — Real data
+          </span>
+        )
+      case 'model-training':
+        return (
+          <span className="settings__status-badge settings__status-badge--training">
+            <Loader2 size={12} className="settings__spin" /> Connected — Model training
+          </span>
+        )
+      case 'error':
+        return (
+          <span className="settings__status-badge settings__status-badge--error">
+            <XCircle size={12} /> Backend unreachable
+          </span>
+        )
+      default:
+        return null
+    }
+  }
 
   return (
     <div className="page-content">
@@ -40,10 +87,19 @@ export default function Settings() {
             <span className="settings__api-value">{apiBaseUrl}</span>
           </div>
           <div className="settings__api-row">
-            <span className="settings__api-label">Status</span>
-            <span className="settings__status-badge settings__status-badge--mock">
-              Using mock data
+            <span className="settings__api-label">Backend Status</span>
+            {statusBadge()}
+          </div>
+          <div className="settings__api-row">
+            <span className="settings__api-label">Model</span>
+            <span className={`settings__status-badge ${modelReady ? 'settings__status-badge--live' : 'settings__status-badge--training'}`}>
+              <Cpu size={12} />
+              {modelReady ? 'wav2vec2 + GradientBoosting — Ready' : 'wav2vec2 + GradientBoosting — Training…'}
             </span>
+          </div>
+          <div className="settings__api-row">
+            <span className="settings__api-label">Dataset</span>
+            <span className="settings__api-value">DAIC-WOZ (275 participants, PHQ-8)</span>
           </div>
         </div>
 

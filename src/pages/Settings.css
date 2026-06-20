@@ -58,6 +58,28 @@
   background: var(--color-warning-light);
   color: #92400e;
 }
+.settings__status-badge--checking {
+  background: var(--color-section-bg);
+  color: var(--color-text-secondary);
+  gap: 5px;
+}
+.settings__status-badge--live {
+  background: var(--color-success-light);
+  color: var(--color-success-dark);
+  gap: 5px;
+}
+.settings__status-badge--training {
+  background: var(--color-warning-light);
+  color: var(--color-warning-dark);
+  gap: 5px;
+}
+.settings__status-badge--error {
+  background: var(--color-danger-light);
+  color: var(--color-danger-dark);
+  gap: 5px;
+}
+.settings__spin { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* Toggle rows */
 .settings__toggle-row {
