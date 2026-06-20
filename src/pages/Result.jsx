@@ -27,13 +27,17 @@ const EMOTION_ICONS = {
   surprise: '😲',
 }
 
+const DEPRESSION_INSIGHTS = {
+  NON_DEPRESSED:
+    'Audio indicators are consistent with a non-depressed speech pattern. Prosodic markers — pitch variability, speaking rate, and energy — fall within normal ranges. This is a screening result only; consult a clinician for a full assessment.',
+  DEPRESSED:
+    'Audio indicators suggest possible depressive patterns. Speech features such as reduced pitch variability, slower rate, and lower energy have been detected. PHQ-8 score threshold (≥ 10) exceeded. Please consult a qualified mental health professional.',
+}
+
 const SENTIMENT_INSIGHTS = {
-  POSITIVE:
-    'The audio expresses a positive, uplifting tone. This is typical of satisfied customers, motivated speakers, or enthusiastic presenters. Key emotions include joy and trust.',
-  NEGATIVE:
-    'The audio conveys negative sentiment — frustration, disappointment, or distress. Consider follow-up actions to address the concerns expressed in this recording.',
-  NEUTRAL:
-    'The audio has a balanced, neutral tone. This is common in informational speech, meeting notes, or factual presentations. No strong emotional signals detected.',
+  POSITIVE: DEPRESSION_INSIGHTS.NON_DEPRESSED,
+  NEGATIVE: DEPRESSION_INSIGHTS.DEPRESSED,
+  NEUTRAL:  'Inconclusive screening result. Audio quality or recording length may be insufficient for a confident prediction. Try a longer, clearer recording.',
 }
 
 function formatDate(isoString) {
@@ -168,10 +172,15 @@ export default function Result() {
       <div className="result-page__grid">
         {/* Sentiment hero */}
         <div className="result-page__hero">
-          <p className="result-page__hero-label">Overall Sentiment</p>
+          <p className="result-page__hero-label">Depression Risk Screening</p>
           <span className={`badge badge--large ${sentimentClass(result.sentiment)}`}>
-            {result.sentiment}
+            {result.prediction || result.sentiment}
           </span>
+          {result.phq8_risk && (
+            <span className="result-page__phq-badge">
+              PHQ-8 Risk: <strong>{result.phq8_risk}</strong>
+            </span>
+          )}
           <div className="result-page__confidence">
             <div className="result-page__confidence-label">
               <TrendingUp size={15} />

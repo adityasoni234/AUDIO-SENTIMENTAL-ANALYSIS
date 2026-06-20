@@ -35,7 +35,7 @@ export default function RecordAudio() {
     setLoading(true)
     try {
       const result = await submitRecordedAudio(recordedBlob, currentUser.uid)
-      navigate(`/result/${result.id}`, { state: { resultId: result.id } })
+      navigate(`/result/${result.id}`, { state: { resultId: result.id, result: result.result } })
     } catch (err) {
       const msg = err?.response?.data?.error || ''
       if (err?.response?.status === 503 || msg.toLowerCase().includes('model not found') || msg.toLowerCase().includes('trained model')) {

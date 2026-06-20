@@ -48,7 +48,7 @@ export default function UploadAudio() {
       clearInterval(progressInterval)
       setProgress(100)
       await new Promise((r) => setTimeout(r, 400))
-      navigate(`/result/${result.id}`, { state: { resultId: result.id } })
+      navigate(`/result/${result.id}`, { state: { resultId: result.id, result: result.result } })
     } catch (err) {
       clearInterval(progressInterval)
       setProgress(0)
