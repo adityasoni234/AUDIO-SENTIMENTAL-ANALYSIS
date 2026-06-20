@@ -36,8 +36,13 @@ export default function RecordAudio() {
     try {
       const result = await submitRecordedAudio(recordedBlob, currentUser.uid)
       navigate(`/result/${result.id}`, { state: { resultId: result.id } })
-    } catch {
-      setError('Submission failed. Please check your connection and try again.')
+    } catch (err) {
+      const msg = err?.response?.data?.error || ''
+      if (err?.response?.status === 503 || msg.toLowerCase().includes('model not found') || msg.toLowerCase().includes('trained model')) {
+        setError('⏳ Model is still training — please wait for it to finish and try again.')
+      } else {
+        setError('Submission failed. Please check your connection and try again.')
+      }
     } finally {
       setLoading(false)
     }

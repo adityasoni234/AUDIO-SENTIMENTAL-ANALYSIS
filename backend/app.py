@@ -31,9 +31,16 @@ def _save_temp(file_storage, suffix: str) -> str:
     return tmp
 
 
+MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib')
+
 @app.get('/api/health')
 def health():
-    return jsonify({'status': 'ok', 'message': 'Depression Detection API is running'})
+    model_ready = os.path.exists(MODEL_PATH)
+    return jsonify({
+        'status': 'ok',
+        'message': 'Depression Detection API is running',
+        'model_ready': model_ready,
+    })
 
 
 @app.post('/api/analyze/upload')

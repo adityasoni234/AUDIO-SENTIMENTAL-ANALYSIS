@@ -49,10 +49,15 @@ export default function UploadAudio() {
       setProgress(100)
       await new Promise((r) => setTimeout(r, 400))
       navigate(`/result/${result.id}`, { state: { resultId: result.id } })
-    } catch {
+    } catch (err) {
       clearInterval(progressInterval)
       setProgress(0)
-      setError('Upload failed. Please check your connection and try again.')
+      const msg = err?.response?.data?.error || ''
+      if (err?.response?.status === 503 || msg.toLowerCase().includes('model not found') || msg.toLowerCase().includes('trained model')) {
+        setError('⏳ Model is still training — please wait for it to finish and try again.')
+      } else {
+        setError('Upload failed. Please check your connection and try again.')
+      }
     } finally {
       setLoading(false)
     }

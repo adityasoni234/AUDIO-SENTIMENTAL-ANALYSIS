@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   BarChart2,
@@ -13,7 +13,9 @@ import {
   TrendingUp,
   ShieldCheck,
   ArrowRight,
+  Loader2,
 } from 'lucide-react'
+import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 import { getUserStats, getAnalysisHistory } from '../api/api'
 import StatCard from '../components/StatCard'
@@ -47,6 +49,26 @@ export default function Dashboard() {
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [statsError, setStatsError] = useState('')
   const [historyError, setHistoryError] = useState('')
+  const [modelReady, setModelReady] = useState(null)
+  const pollRef = useRef(null)
+
+  useEffect(() => {
+    async function checkModel() {
+      try {
+        const res = await axios.get(
+          `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'}/health`
+        )
+        setModelReady(res.data.model_ready)
+        if (!res.data.model_ready) {
+          pollRef.current = setTimeout(checkModel, 15000)
+        }
+      } catch {
+        pollRef.current = setTimeout(checkModel, 15000)
+      }
+    }
+    checkModel()
+    return () => clearTimeout(pollRef.current)
+  }, [])
 
   const insightTip = INSIGHTS[new Date().getDay() % INSIGHTS.length]
 
@@ -87,6 +109,23 @@ export default function Dashboard() {
 
   return (
     <div className="page-content">
+      {/* Model training banner */}
+      {modelReady === false && (
+        <div className="dashboard__training-banner">
+          <Loader2 size={16} className="dashboard__training-spinner" />
+          <span>
+            <strong>Model is still training</strong> — feature extraction running on 275 participants.
+            Analysis will be available once training completes (~4–5 hrs remaining). This page refreshes automatically.
+          </span>
+        </div>
+      )}
+      {modelReady === true && (
+        <div className="dashboard__ready-banner">
+          <ShieldCheck size={16} />
+          <span><strong>Model ready</strong> — depression detection is live. Upload or record audio to analyze.</span>
+        </div>
+      )}
+
       {/* Welcome banner */}
       <div className="dashboard__welcome">
         <div className="dashboard__welcome-body">
