@@ -6,8 +6,8 @@ Pipeline (matches project specification):
   2. Preprocessing        — resample 16kHz, normalize, VAD, bandpass, spectral subtraction
   3. Segmentation         — 7s overlapping segments (5–10 s range)
   4. Annotation/Labeling  — PHQ-8 ≥ 10 → Depressed (1), else Non-Depressed (0)
-  5. wav2vec 2.0 features — prosodic/rhythm/energy/emotion patterns (1536-dim)
-  6. Model Training       — Random Forest + XGBoost (ensemble, best by LOPO-F1)
+  5. wav2vec 2.0 features — prosodic/rhythm/energy/emotion patterns (1536-dim) on MPS/GPU
+  6. Model Training       — Random Forest + GradientBoosting (best by LOPO-F1)
   7. Depression Prediction— Depressed | Non-Depressed
   8. Model Evaluation     — Accuracy, Precision, Recall, F1-score, ROC-AUC
 
@@ -24,7 +24,7 @@ import sys
 import warnings
 warnings.filterwarnings("ignore")
 
-# Prevent OpenMP / PyTorch thread conflicts on Apple Silicon
+# Prevent thread conflicts on Apple Silicon; enable MPS fallback for unsupported ops
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -33,14 +33,13 @@ import numpy as np
 import pandas as pd
 import joblib
 from tqdm import tqdm
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score,
     f1_score, roc_auc_score, classification_report, confusion_matrix,
 )
-from xgboost import XGBClassifier
 import soundfile as sf
 import subprocess
 import tempfile
@@ -208,26 +207,40 @@ def augment(seg: np.ndarray) -> list:
     return copies
 
 
-# ── Step 5: wav2vec 2.0 Feature Learning ──────────────────────────────────────
+# ── Step 5: wav2vec 2.0 Feature Learning (MPS/GPU accelerated) ────────────────
 
 _wav2vec_proc  = None
 _wav2vec_model = None
+_device        = None
+
+
+def _get_device():
+    import torch
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
 
 
 def _load_wav2vec():
-    global _wav2vec_proc, _wav2vec_model
+    global _wav2vec_proc, _wav2vec_model, _device
     if _wav2vec_proc is None:
+        import torch
         from transformers import Wav2Vec2Processor, Wav2Vec2Model
-        print("  Loading facebook/wav2vec2-base…")
+        _device = _get_device()
+        print(f"  Loading facebook/wav2vec2-base on {_device}…")
         _wav2vec_proc  = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base")
         _wav2vec_model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base", use_safetensors=True)
+        _wav2vec_model = _wav2vec_model.to(_device)
         _wav2vec_model.eval()
-    return _wav2vec_proc, _wav2vec_model
+        print(f"  wav2vec2 ready on {_device}")
+    return _wav2vec_proc, _wav2vec_model, _device
 
 
 def wav2vec_features(seg: np.ndarray) -> np.ndarray:
     """
-    Extract wav2vec 2.0 hidden states capturing:
+    Extract wav2vec 2.0 hidden states on MPS/GPU capturing:
     - Prosodic flattening
     - Speech rhythm irregularities
     - Vocal energy variations
@@ -236,15 +249,16 @@ def wav2vec_features(seg: np.ndarray) -> np.ndarray:
     Returns 1536-dim vector (mean + std pooling over time axis).
     """
     import torch
-    proc, model = _load_wav2vec()
+    proc, model, device = _load_wav2vec()
     inp = proc(seg, sampling_rate=TARGET_SR, return_tensors="pt", padding=True)
+    input_values = inp.input_values.to(device)
     with torch.no_grad():
-        out = model(inp.input_values)
-    h = out.last_hidden_state.squeeze(0)   # (T, 768)
+        out = model(input_values)
+    h = out.last_hidden_state.squeeze(0).cpu()   # (T, 768) back to CPU for numpy
     return np.concatenate([
         h.mean(dim=0).numpy(),
         h.std(dim=0).numpy(),
-    ]).astype(np.float32)                  # (1536,)
+    ]).astype(np.float32)                         # (1536,)
 
 
 # ── Feature extraction with disk cache ────────────────────────────────────────
@@ -434,9 +448,8 @@ def main():
     print(f"  Non-Depressed segments             : {(y==0).sum()}")
     print(f"  Feature dimensionality             : {X.shape[1]}")
 
-    # Step 6: Build models — Random Forest and XGBoost
+    # Step 6: Build models — Random Forest + GradientBoosting (pure sklearn, no OpenMP conflict)
     print(f"\n── Step 6: Model Building ───────────────────────────")
-    scale_pos = int((y==0).sum() / max((y==1).sum(), 1))
 
     rf = Pipeline([
         ("sc",  StandardScaler()),
@@ -446,27 +459,24 @@ def main():
         )),
     ])
 
-    xgb = Pipeline([
+    gb = Pipeline([
         ("sc",  StandardScaler()),
-        ("clf", XGBClassifier(
+        ("clf", GradientBoostingClassifier(
             n_estimators=300, learning_rate=0.05, max_depth=5,
-            subsample=0.8, colsample_bytree=0.8,
-            scale_pos_weight=scale_pos,
-            use_label_encoder=False, eval_metric="logloss",
-            random_state=42, n_jobs=-1,
+            subsample=0.8, random_state=42,
         )),
     ])
 
     # Step 8: Evaluate both with LOPO-CV
     print(f"\n── Step 8: Model Evaluation (LOPO Cross-Validation) ──")
-    f1_rf,  acc_rf  = lopo_evaluate(X, y, pids, rf,  "Random Forest")
-    f1_xgb, acc_xgb = lopo_evaluate(X, y, pids, xgb, "XGBoost")
+    f1_rf, acc_rf = lopo_evaluate(X, y, pids, rf, "Random Forest")
+    f1_gb, acc_gb = lopo_evaluate(X, y, pids, gb, "GradientBoosting")
 
     # Pick best by F1
-    if f1_rf >= f1_xgb:
+    if f1_rf >= f1_gb:
         best_name, best_pipe, best_acc, best_f1 = "Random Forest", rf, acc_rf, f1_rf
     else:
-        best_name, best_pipe, best_acc, best_f1 = "XGBoost", xgb, acc_xgb, f1_xgb
+        best_name, best_pipe, best_acc, best_f1 = "GradientBoosting", gb, acc_gb, f1_gb
 
     print(f"\n{'='*58}")
     print(f"  Best model : {best_name}")
