@@ -3,7 +3,7 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import {
   Upload, History, Calendar, Clock, HardDrive, FileAudio,
   MessageSquare, Brain, TrendingUp,
-  Smile, Handshake, Telescope, CloudRain, Flame, ShieldAlert, ThumbsDown, Zap,
+  Smile, Handshake, Search, CloudRain, Flame, ShieldAlert, ThumbsDown, Zap,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { getSentimentResult } from '../api/api'
@@ -13,7 +13,7 @@ import './Result.css'
 const EMOTION_ICONS = {
   joy:          { icon: Smile,       color: '#f59e0b' },
   trust:        { icon: Handshake,   color: '#10b981' },
-  anticipation: { icon: Telescope,   color: '#8b5cf6' },
+  anticipation: { icon: Search,      color: '#8b5cf6' },
   sadness:      { icon: CloudRain,   color: '#6366f1' },
   anger:        { icon: Flame,       color: '#ef4444' },
   fear:         { icon: ShieldAlert, color: '#f97316' },
