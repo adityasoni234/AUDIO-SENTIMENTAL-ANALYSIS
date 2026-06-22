@@ -13,7 +13,7 @@ import soundfile as sf
 
 from preprocessing import preprocess
 from segmentation  import segment_audio
-from features      import extract_features
+from features      import extract_features, extract_features_participant
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib')
 PHQ8_THRESHOLD = 10
@@ -51,20 +51,55 @@ def _get_filesize(path: str) -> str:
 
 # ── Emotion profiles keyed by prediction ─────────────────────────────────────
 
-_EMOTION_PROFILES = {
-    'DEPRESSED': {
-        'sadness': 78, 'fear': 45, 'anger': 30, 'disgust': 20, 'joy': 8,
-    },
-    'NON_DEPRESSED': {
-        'joy': 72, 'trust': 60, 'anticipation': 48, 'sadness': 12, 'anger': 6,
-    },
-}
+def _compute_acoustic_emotions(audio: np.ndarray, sr: int = 16000) -> dict:
+    """
+    Compute emotion indicators from real acoustic features of the audio.
+    No hardcoded profiles — each upload produces unique results.
+    """
+    if len(audio) == 0:
+        return {'sadness': 50, 'joy': 50, 'anger': 50, 'fear': 50, 'trust': 50}
 
+    # Energy (loudness) — maps to anger/joy intensity
+    rms = float(np.sqrt(np.mean(audio ** 2)))
+    energy_pct = int(np.clip(rms * 1200, 5, 95))
 
-def _emotion_scores(prediction: str) -> dict:
-    profile = dict(_EMOTION_PROFILES.get(prediction, _EMOTION_PROFILES['NON_DEPRESSED']))
-    rng = np.random.default_rng()
-    return {k: int(np.clip(v + rng.integers(-5, 6), 1, 100)) for k, v in profile.items()}
+    # Pitch variability — high std = emotional, low = flat (depression marker)
+    frame = 512; hop = 256
+    zcr = float(np.mean([
+        np.sum(np.abs(np.diff(np.sign(audio[i:i+frame])))) / (2 * frame)
+        for i in range(0, len(audio) - frame, hop)
+    ]))
+    pitch_var = int(np.clip(zcr * 600, 5, 95))
+
+    # Spectral centroid proxy — brightness of speech
+    fft_mag = np.abs(np.fft.rfft(audio[:min(len(audio), sr * 5)]))
+    freqs   = np.fft.rfftfreq(min(len(audio), sr * 5), 1 / sr)
+    centroid = float(np.sum(freqs * fft_mag) / (np.sum(fft_mag) + 1e-9))
+    brightness = int(np.clip((centroid - 200) / 30, 5, 95))
+
+    # Voiced fraction (VAD proxy)
+    voiced_frac = float(np.mean(np.abs(audio) > 0.01))
+    activity = int(np.clip(voiced_frac * 100, 10, 90))
+
+    # Map to emotions
+    rng = np.random.default_rng(seed=int(rms * 1e6) % (2**31))
+    jitter = lambda: int(rng.integers(-4, 5))
+
+    anger       = int(np.clip((energy_pct + brightness) // 2 + jitter(), 5, 95))
+    joy         = int(np.clip((brightness + activity) // 2 - 10 + jitter(), 5, 90))
+    sadness     = int(np.clip(100 - (energy_pct + pitch_var) // 2 + jitter(), 5, 90))
+    fear        = int(np.clip((100 - energy_pct + pitch_var) // 2 + jitter(), 5, 90))
+    trust       = int(np.clip((activity + 100 - anger) // 2 + jitter(), 5, 90))
+    anticipation= int(np.clip((pitch_var + activity) // 2 + jitter(), 5, 90))
+
+    return {
+        'anger':        anger,
+        'joy':          joy,
+        'sadness':      sadness,
+        'fear':         fear,
+        'trust':        trust,
+        'anticipation': anticipation,
+    }
 
 
 # ── Main inference function ────────────────────────────────────────────────────
@@ -78,14 +113,29 @@ def analyze(audio_path: str, filename: str = None) -> dict:
     bundle   = _load_model()
     pipeline = bundle['pipeline']
 
-    # Pipeline
+    # Preprocess → segment → extract per-segment features
     clean    = preprocess(audio_path)
     segments = segment_audio(clean)
-    feat     = extract_features(segments).reshape(1, -1)
+    seg_feats = extract_features(segments)   # (N, 1536)
 
-    label      = int(pipeline.predict(feat)[0])
-    proba      = pipeline.predict_proba(feat)[0]
-    confidence = round(float(proba[label]) * 100, 1)
+    threshold = bundle.get('threshold', 0.4)
+
+    if bundle.get('segment_majority', False):
+        # Majority vote: average class-1 probability across all segments
+        seg_proba  = pipeline.predict_proba(seg_feats)   # (N, 2)
+        mean_prob  = float(seg_proba[:, 1].mean())
+        label      = int(mean_prob >= threshold)
+        confidence = round(mean_prob * 100 if label == 1 else (1 - mean_prob) * 100, 1)
+    elif bundle.get('participant_level', False):
+        feat = extract_features_participant(segments).reshape(1, -1)
+        proba = pipeline.predict_proba(feat)[0]
+        label = int(proba[1] >= threshold)
+        confidence = round(float(proba[label]) * 100, 1)
+    else:
+        feat  = seg_feats.mean(axis=0).reshape(1, -1)
+        proba = pipeline.predict_proba(feat)[0]
+        label = int(pipeline.predict(feat)[0])
+        confidence = round(float(proba[label]) * 100, 1)
 
     prediction = 'DEPRESSED' if label == 1 else 'NON_DEPRESSED'
     # Map to frontend sentiment field
@@ -102,7 +152,7 @@ def analyze(audio_path: str, filename: str = None) -> dict:
         'prediction':  prediction,         # DEPRESSED | NON_DEPRESSED
         'phq8_risk':   phq8_risk,          # HIGH | MODERATE | LOW
         'confidence':  confidence,
-        'emotions':    _emotion_scores(prediction),
+        'emotions':    _compute_acoustic_emotions(clean),
         'transcript':  '',
         'audioFile':   filename or os.path.basename(audio_path),
         'duration':    _get_duration(audio_path),

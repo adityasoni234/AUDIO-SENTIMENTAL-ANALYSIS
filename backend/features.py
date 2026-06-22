@@ -75,7 +75,19 @@ def extract_segment_features(segment: np.ndarray) -> np.ndarray:
 
 def extract_features(segments: List[np.ndarray]) -> np.ndarray:
     """
-    Aggregate per-segment features into one vector per recording (mean across segments).
+    Return per-segment feature matrix: shape (n_segments, 1536).
+    Caller decides how to aggregate (mean-only vs mean+std).
     """
     seg_feats = [extract_segment_features(seg) for seg in segments]
-    return np.mean(seg_feats, axis=0)   # (1536,)
+    return np.array(seg_feats, dtype=np.float32)  # (N, 1536)
+
+
+def extract_features_participant(segments: List[np.ndarray]) -> np.ndarray:
+    """
+    Participant-level feature: mean+std across all segments → 3072-dim.
+    Matches training aggregation in retrain script.
+    """
+    seg_feats = extract_features(segments)  # (N, 1536)
+    if len(seg_feats) == 1:
+        return np.concatenate([seg_feats[0], np.zeros(seg_feats.shape[1])]).astype(np.float32)
+    return np.concatenate([seg_feats.mean(axis=0), seg_feats.std(axis=0)]).astype(np.float32)
