@@ -14,6 +14,7 @@ import soundfile as sf
 from preprocessing import preprocess
 from segmentation  import segment_audio
 from features      import extract_features, extract_features_participant
+from librosa_features import extract_librosa_features
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib')
 PHQ8_THRESHOLD = 10
@@ -113,26 +114,47 @@ def analyze(audio_path: str, filename: str = None) -> dict:
     bundle   = _load_model()
     pipeline = bundle['pipeline']
 
-    # Preprocess → segment → extract per-segment features
+    # Preprocess audio
     clean    = preprocess(audio_path)
-    segments = segment_audio(clean)
-    seg_feats = extract_features(segments)   # (N, 1536)
-
     threshold = bundle.get('threshold', 0.4)
+    feature_type = bundle.get('feature_type', 'wav2vec2')
 
-    if bundle.get('segment_majority', False):
-        # Majority vote: average class-1 probability across all segments
-        seg_proba  = pipeline.predict_proba(seg_feats)   # (N, 2)
-        mean_prob  = float(seg_proba[:, 1].mean())
-        label      = int(mean_prob >= threshold)
+    scaler   = bundle.get('scaler')
+    pca      = bundle.get('pca')
+
+    def _apply_transforms(mat):
+        """Apply scaler and optional PCA stored in model bundle."""
+        if scaler is not None:
+            mat = scaler.transform(mat)
+        if pca is not None:
+            mat = pca.transform(mat)
+        return mat
+
+    if feature_type == 'librosa':
+        feat  = extract_librosa_features(audio_path).reshape(1, -1)
+        feat  = _apply_transforms(feat)
+        proba = pipeline.predict_proba(feat)[0]
+        label = int(proba[1] >= threshold)
+        confidence = round(float(proba[label]) * 100, 1)
+    elif bundle.get('segment_majority', False):
+        segments  = segment_audio(clean)
+        seg_feats = extract_features(segments)           # (N, 1536)
+        seg_feats = _apply_transforms(seg_feats)
+        seg_proba = pipeline.predict_proba(seg_feats)
+        mean_prob = float(seg_proba[:, 1].mean())
+        label     = int(mean_prob >= threshold)
         confidence = round(mean_prob * 100 if label == 1 else (1 - mean_prob) * 100, 1)
     elif bundle.get('participant_level', False):
-        feat = extract_features_participant(segments).reshape(1, -1)
+        segments = segment_audio(clean)
+        feat  = extract_features_participant(segments).reshape(1, -1)
+        feat  = _apply_transforms(feat)
         proba = pipeline.predict_proba(feat)[0]
         label = int(proba[1] >= threshold)
         confidence = round(float(proba[label]) * 100, 1)
     else:
-        feat  = seg_feats.mean(axis=0).reshape(1, -1)
+        segments  = segment_audio(clean)
+        seg_feats = extract_features(segments)
+        feat  = _apply_transforms(seg_feats.mean(axis=0).reshape(1, -1))
         proba = pipeline.predict_proba(feat)[0]
         label = int(pipeline.predict(feat)[0])
         confidence = round(float(proba[label]) * 100, 1)
@@ -148,9 +170,9 @@ def analyze(audio_path: str, filename: str = None) -> dict:
         phq8_risk = 'MODERATE'
 
     return {
-        'sentiment':   sentiment,          # frontend compat
-        'prediction':  prediction,         # DEPRESSED | NON_DEPRESSED
-        'phq8_risk':   phq8_risk,          # HIGH | MODERATE | LOW
+        'sentiment':   sentiment,
+        'prediction':  prediction,
+        'phq8_risk':   phq8_risk,
         'confidence':  confidence,
         'emotions':    _compute_acoustic_emotions(clean),
         'transcript':  '',
@@ -158,6 +180,6 @@ def analyze(audio_path: str, filename: str = None) -> dict:
         'duration':    _get_duration(audio_path),
         'fileSize':    _get_filesize(audio_path),
         'analyzedAt':  datetime.datetime.utcnow().isoformat() + 'Z',
-        'modelName':   bundle.get('model_name', 'RF+LightGBM'),
-        'segments':    len(segments),
+        'modelName':   bundle.get('model_name', 'RF+XGBoost'),
+        'segments':    len(segments) if 'segments' in dir() else 1,
     }
