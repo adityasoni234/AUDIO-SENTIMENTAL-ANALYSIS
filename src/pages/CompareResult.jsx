@@ -19,8 +19,10 @@ const SEVERITY_CONFIG = {
 const MODEL_META = {
   xgboost: { label: 'XGBoost',       icon: Cpu,      accuracy: '93.76%', color: '#6366f1' },
   rf:       { label: 'Random Forest', icon: TreePine, accuracy: '80.18%', color: '#10b981' },
-  cnn:      { label: 'CNN (1D)',      icon: Network,  accuracy: '—',      color: '#f59e0b' },
+  cnn:      { label: 'CNN (1D)',      icon: Network,  accuracy: '96.82%', color: '#f59e0b' },
 }
+
+const ALL_MODELS = ['xgboost', 'rf', 'cnn']
 
 // ── Severity Gauge ──────────────────────────────────────────────────────────
 function SeverityGauge({ severity, confidence }) {
@@ -237,8 +239,8 @@ export default function CompareResult() {
       <div className="cmp-section">
         <h2 className="cmp-section-title"><Users size={17} /> Individual Model Results</h2>
         <div className="cmp-cards">
-          {Object.entries(models).map(([key, result]) => (
-            <ModelCard key={key} modelKey={key} result={result} />
+          {ALL_MODELS.map(key => (
+            <ModelCard key={key} modelKey={key} result={models[key] || { error: 'Model not available' }} />
           ))}
         </div>
       </div>

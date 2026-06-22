@@ -9,7 +9,7 @@ import './UploadAudio.css'
 const MODEL_OPTIONS = [
   { id: 'xgboost', label: 'XGBoost',       accuracy: '93.76%',   desc: 'Highest accuracy — recommended', icon: Cpu      },
   { id: 'rf',      label: 'Random Forest', accuracy: '80.18%',   desc: 'Fast · interpretable',           icon: TreePine  },
-  { id: 'cnn',     label: 'CNN (1D)',      accuracy: 'Training…',desc: 'Deep learning · wav2vec2',       icon: Network   },
+  { id: 'cnn',     label: 'CNN (1D)',      accuracy: '96.82%',   desc: 'Deep learning · wav2vec2',       icon: Network   },
 ]
 
 export default function UploadAudio() {
@@ -84,12 +84,12 @@ export default function UploadAudio() {
                 className={`model-selector__option${modelChoice === id ? ' model-selector__option--active' : ''}`}
                 onClick={() => setModelChoice(id)}
               >
-                <Icon size={18} />
+                {modelChoice === id && <span className="model-selector__check">✓</span>}
+                <div className="model-selector__option-icon"><Icon size={18} /></div>
                 <div className="model-selector__option-text">
                   <span className="model-selector__option-name">{label}</span>
                   <span className="model-selector__option-meta">{accuracy} · {desc}</span>
                 </div>
-                {modelChoice === id && <span className="model-selector__check">✓</span>}
               </button>
             ))}
           </div>
