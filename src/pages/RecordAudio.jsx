@@ -1,10 +1,15 @@
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Send } from 'lucide-react'
+import { Send, Cpu, TreePine } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { submitRecordedAudio } from '../api/api'
 import AudioRecorder from '../components/AudioRecorder'
 import './RecordAudio.css'
+
+const MODEL_OPTIONS = [
+  { id: 'xgboost', label: 'XGBoost',       accuracy: '93.76%', desc: 'Higher accuracy — recommended', icon: Cpu },
+  { id: 'rf',      label: 'Random Forest',  accuracy: '80.18%', desc: 'Faster, interpretable',         icon: TreePine },
+]
 
 export default function RecordAudio() {
   const { currentUser } = useAuth()
@@ -13,6 +18,7 @@ export default function RecordAudio() {
   const [recordedBlob, setRecordedBlob] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [modelChoice, setModelChoice] = useState('xgboost')
 
   const handleRecordingComplete = useCallback((blob) => {
     setRecordedBlob(blob)
@@ -34,7 +40,7 @@ export default function RecordAudio() {
     setError('')
     setLoading(true)
     try {
-      const result = await submitRecordedAudio(recordedBlob, currentUser.uid)
+      const result = await submitRecordedAudio(recordedBlob, currentUser.uid, modelChoice)
       navigate(`/result/${result.id}`, { state: { resultId: result.id, result: result.result } })
     } catch (err) {
       const msg = err?.response?.data?.error || ''
@@ -58,6 +64,28 @@ export default function RecordAudio() {
       </div>
 
       <div className="record-page__container">
+        {/* Model selector */}
+        <div className="model-selector">
+          <p className="model-selector__label">Select Model</p>
+          <div className="model-selector__options">
+            {MODEL_OPTIONS.map(({ id, label, accuracy, desc, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                className={`model-selector__option${modelChoice === id ? ' model-selector__option--active' : ''}`}
+                onClick={() => setModelChoice(id)}
+              >
+                <Icon size={18} />
+                <div className="model-selector__option-text">
+                  <span className="model-selector__option-name">{label}</span>
+                  <span className="model-selector__option-meta">{accuracy} accuracy · {desc}</span>
+                </div>
+                {modelChoice === id && <span className="model-selector__check">✓</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="record-page__card">
           <AudioRecorder
             onRecordingComplete={handleRecordingComplete}

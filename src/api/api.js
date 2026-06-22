@@ -15,10 +15,11 @@ const axiosInstance = axios.create({
  * Upload an audio file for analysis.
  * Saves the result to Firestore and returns the Firestore doc ID.
  */
-export async function uploadAudio(file, firebaseUid) {
+export async function uploadAudio(file, firebaseUid, modelChoice = 'xgboost') {
   const formData = new FormData()
   formData.append('audio', file)
   formData.append('uid', firebaseUid)
+  formData.append('model', modelChoice)
 
   const response = await axiosInstance.post('/analyze/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data', 'x-firebase-uid': firebaseUid },
@@ -40,10 +41,11 @@ export async function uploadAudio(file, firebaseUid) {
  * Submit a recorded audio blob for analysis.
  * Saves the result to Firestore and returns the Firestore doc ID.
  */
-export async function submitRecordedAudio(blob, firebaseUid) {
+export async function submitRecordedAudio(blob, firebaseUid, modelChoice = 'xgboost') {
   const formData = new FormData()
   formData.append('audio', blob, 'recording.webm')
   formData.append('uid', firebaseUid)
+  formData.append('model', modelChoice)
 
   const response = await axiosInstance.post('/analyze/record', formData, {
     headers: { 'Content-Type': 'multipart/form-data', 'x-firebase-uid': firebaseUid },

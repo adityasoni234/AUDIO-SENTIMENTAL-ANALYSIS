@@ -13,7 +13,7 @@ import tempfile
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-from predict import analyze
+from predict import analyze, MODELS
 
 app = Flask(__name__)
 CORS(app, origins=['http://localhost:5173', 'http://localhost:3000'])
@@ -31,15 +31,19 @@ def _save_temp(file_storage, suffix: str) -> str:
     return tmp
 
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib')
+XGB_PATH = os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib')
+RF_PATH  = os.path.join(os.path.dirname(__file__), 'models', 'rf_model.joblib')
 
 @app.get('/api/health')
 def health():
-    model_ready = os.path.exists(MODEL_PATH)
     return jsonify({
         'status': 'ok',
         'message': 'Depression Detection API is running',
-        'model_ready': model_ready,
+        'model_ready': os.path.exists(XGB_PATH),
+        'models': {
+            'xgboost': {'ready': os.path.exists(XGB_PATH), 'accuracy': 93.76},
+            'rf':      {'ready': os.path.exists(RF_PATH),  'accuracy': 80.18},
+        },
     })
 
 
@@ -52,11 +56,12 @@ def analyze_upload():
     if not file.filename or not _allowed(file.filename):
         return jsonify({'error': 'Unsupported file type'}), 400
 
-    suffix  = '.' + file.filename.rsplit('.', 1)[1].lower()
-    tmp_path = _save_temp(file, suffix)
+    model_choice = request.form.get('model', 'xgboost')  # 'xgboost' | 'rf'
+    suffix       = '.' + file.filename.rsplit('.', 1)[1].lower()
+    tmp_path     = _save_temp(file, suffix)
 
     try:
-        result = analyze(tmp_path, filename=file.filename)
+        result = analyze(tmp_path, filename=file.filename, model_choice=model_choice)
         return jsonify(result)
     except FileNotFoundError as e:
         return jsonify({'error': str(e)}), 503
@@ -73,11 +78,12 @@ def analyze_record():
     if 'audio' not in request.files:
         return jsonify({'error': 'No audio blob provided'}), 400
 
-    file     = request.files['audio']
-    tmp_path = _save_temp(file, '.webm')
+    file         = request.files['audio']
+    model_choice = request.form.get('model', 'xgboost')
+    tmp_path     = _save_temp(file, '.webm')
 
     try:
-        result = analyze(tmp_path, filename='recording.webm')
+        result = analyze(tmp_path, filename='recording.webm', model_choice=model_choice)
         return jsonify(result)
     except FileNotFoundError as e:
         return jsonify({'error': str(e)}), 503

@@ -1,10 +1,27 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload } from 'lucide-react'
+import { Upload, Cpu, TreePine } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { uploadAudio } from '../api/api'
 import AudioUploader from '../components/AudioUploader'
 import './UploadAudio.css'
+
+const MODEL_OPTIONS = [
+  {
+    id: 'xgboost',
+    label: 'XGBoost',
+    accuracy: '93.76%',
+    desc: 'Higher accuracy — recommended',
+    icon: Cpu,
+  },
+  {
+    id: 'rf',
+    label: 'Random Forest',
+    accuracy: '80.18%',
+    desc: 'Faster, interpretable',
+    icon: TreePine,
+  },
+]
 
 export default function UploadAudio() {
   const { currentUser } = useAuth()
@@ -14,6 +31,7 @@ export default function UploadAudio() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [progress, setProgress] = useState(0)
+  const [modelChoice, setModelChoice] = useState('xgboost')
 
   function handleFileSelected(file) {
     setSelectedFile(file)
@@ -44,7 +62,7 @@ export default function UploadAudio() {
     }, 150)
 
     try {
-      const result = await uploadAudio(selectedFile, currentUser.uid)
+      const result = await uploadAudio(selectedFile, currentUser.uid, modelChoice)
       clearInterval(progressInterval)
       setProgress(100)
       await new Promise((r) => setTimeout(r, 400))
@@ -73,6 +91,28 @@ export default function UploadAudio() {
       </div>
 
       <div className="upload-page__container">
+        {/* Model selector */}
+        <div className="model-selector">
+          <p className="model-selector__label">Select Model</p>
+          <div className="model-selector__options">
+            {MODEL_OPTIONS.map(({ id, label, accuracy, desc, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                className={`model-selector__option${modelChoice === id ? ' model-selector__option--active' : ''}`}
+                onClick={() => setModelChoice(id)}
+              >
+                <Icon size={18} />
+                <div className="model-selector__option-text">
+                  <span className="model-selector__option-name">{label}</span>
+                  <span className="model-selector__option-meta">{accuracy} accuracy · {desc}</span>
+                </div>
+                {modelChoice === id && <span className="model-selector__check">✓</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit} noValidate>
           <div className="upload-page__card">
             <AudioUploader

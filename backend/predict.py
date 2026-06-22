@@ -16,22 +16,23 @@ from segmentation  import segment_audio
 from features      import extract_features, extract_features_participant
 from librosa_features import extract_librosa_features
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib')
+MODELS = {
+    'xgboost': os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib'),
+    'rf':      os.path.join(os.path.dirname(__file__), 'models', 'rf_model.joblib'),
+}
 PHQ8_THRESHOLD = 10
 
-_model_bundle = None
+_bundles = {}
 
 
-def _load_model():
-    global _model_bundle
-    if _model_bundle is None:
-        if not os.path.exists(MODEL_PATH):
-            raise FileNotFoundError(
-                "Trained model not found.\n"
-                "Run: python train.py --data ./data/DAIC-WOZ --labels ./data/DAIC-WOZ/labels.csv"
-            )
-        _model_bundle = joblib.load(MODEL_PATH)
-    return _model_bundle
+def _load_model(model_choice: str = 'xgboost'):
+    key = model_choice if model_choice in MODELS else 'xgboost'
+    if key not in _bundles:
+        path = MODELS[key]
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model '{key}' not found at {path}.")
+        _bundles[key] = joblib.load(path)
+    return _bundles[key]
 
 
 # ── Metadata helpers ───────────────────────────────────────────────────────────
@@ -105,13 +106,8 @@ def _compute_acoustic_emotions(audio: np.ndarray, sr: int = 16000) -> dict:
 
 # ── Main inference function ────────────────────────────────────────────────────
 
-def analyze(audio_path: str, filename: str = None) -> dict:
-    """
-    Run the full depression detection pipeline on an audio file.
-
-    Returns a dict compatible with the frontend result shape.
-    """
-    bundle   = _load_model()
+def analyze(audio_path: str, filename: str = None, model_choice: str = 'xgboost') -> dict:
+    bundle   = _load_model(model_choice)
     pipeline = bundle['pipeline']
 
     # Preprocess audio

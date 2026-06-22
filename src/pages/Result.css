@@ -124,7 +124,7 @@
   gap: 8px;
   margin-bottom: 8px;
 }
-.emotion-card__icon { font-size: 18px; }
+.emotion-card__icon { display: flex; align-items: center; }
 .emotion-card__name {
   font-size: 13px;
   font-weight: 600;
