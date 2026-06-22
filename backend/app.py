@@ -33,6 +33,7 @@ def _save_temp(file_storage, suffix: str) -> str:
 
 XGB_PATH = os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib')
 RF_PATH  = os.path.join(os.path.dirname(__file__), 'models', 'rf_model.joblib')
+CNN_PATH = os.path.join(os.path.dirname(__file__), 'models', 'cnn_model.joblib')
 
 @app.get('/api/health')
 def health():
@@ -43,6 +44,7 @@ def health():
         'models': {
             'xgboost': {'ready': os.path.exists(XGB_PATH), 'accuracy': 93.76},
             'rf':      {'ready': os.path.exists(RF_PATH),  'accuracy': 80.18},
+            'cnn':     {'ready': os.path.exists(CNN_PATH), 'accuracy': None},
         },
     })
 

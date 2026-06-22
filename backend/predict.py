@@ -19,10 +19,50 @@ from librosa_features import extract_librosa_features
 MODELS = {
     'xgboost': os.path.join(os.path.dirname(__file__), 'models', 'depression_model.joblib'),
     'rf':      os.path.join(os.path.dirname(__file__), 'models', 'rf_model.joblib'),
+    'cnn':     os.path.join(os.path.dirname(__file__), 'models', 'cnn_model.joblib'),
 }
 PHQ8_THRESHOLD = 10
 
-_bundles = {}
+_bundles   = {}
+_cnn_model = None   # PyTorch CNN kept in memory separately
+
+
+def _load_cnn(bundle: dict):
+    """Load PyTorch CNN from weights file, cache in memory."""
+    global _cnn_model
+    if _cnn_model is not None:
+        return _cnn_model
+
+    import torch
+    import torch.nn as nn
+
+    class CNN1D(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = nn.Sequential(
+                nn.Conv1d(1, 64, kernel_size=8, stride=2, padding=4),
+                nn.BatchNorm1d(64), nn.GELU(), nn.MaxPool1d(2),
+                nn.Conv1d(64, 128, kernel_size=5, stride=1, padding=2),
+                nn.BatchNorm1d(128), nn.GELU(), nn.MaxPool1d(2),
+                nn.Conv1d(128, 256, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm1d(256), nn.GELU(),
+                nn.Conv1d(256, 256, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm1d(256), nn.GELU(),
+                nn.AdaptiveAvgPool1d(1),
+            )
+            self.head = nn.Sequential(
+                nn.Flatten(), nn.Linear(256, 128), nn.GELU(),
+                nn.Dropout(0.4), nn.Linear(128, 2),
+            )
+        def forward(self, x):
+            return self.head(self.conv(x.unsqueeze(1)))
+
+    ckpt = torch.load(bundle['cnn_weights_path'], map_location='cpu')
+    model = CNN1D()
+    model.load_state_dict(ckpt['state_dict'])
+    model.eval()
+    _cnn_model = model
+    return model
 
 
 def _load_model(model_choice: str = 'xgboost'):
@@ -126,7 +166,21 @@ def analyze(audio_path: str, filename: str = None, model_choice: str = 'xgboost'
             mat = pca.transform(mat)
         return mat
 
-    if feature_type == 'librosa':
+    if feature_type == 'wav2vec2_cnn':
+        import torch
+        cnn_model = _load_cnn(bundle)
+        segments  = segment_audio(clean)
+        seg_feats = extract_features(segments)                    # (N, 1536)
+        if scaler is not None:
+            seg_feats = scaler.transform(seg_feats)
+        x_t = torch.tensor(seg_feats, dtype=torch.float32)
+        with torch.no_grad():
+            logits = cnn_model(x_t)
+            probs  = torch.softmax(logits, dim=1)[:, 1].numpy()  # dep prob per seg
+        mean_prob = float(probs.mean())
+        label     = int(mean_prob >= threshold)
+        confidence = round(mean_prob * 100 if label == 1 else (1 - mean_prob) * 100, 1)
+    elif feature_type == 'librosa':
         feat  = extract_librosa_features(audio_path).reshape(1, -1)
         feat  = _apply_transforms(feat)
         proba = pipeline.predict_proba(feat)[0]

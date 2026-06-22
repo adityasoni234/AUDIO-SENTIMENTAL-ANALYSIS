@@ -1,14 +1,15 @@
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Send, Cpu, TreePine } from 'lucide-react'
+import { Send, Cpu, TreePine, Network } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { submitRecordedAudio } from '../api/api'
 import AudioRecorder from '../components/AudioRecorder'
 import './RecordAudio.css'
 
 const MODEL_OPTIONS = [
-  { id: 'xgboost', label: 'XGBoost',       accuracy: '93.76%', desc: 'Higher accuracy — recommended', icon: Cpu },
-  { id: 'rf',      label: 'Random Forest',  accuracy: '80.18%', desc: 'Faster, interpretable',         icon: TreePine },
+  { id: 'xgboost', label: 'XGBoost',       accuracy: '93.76%',   desc: 'Highest accuracy — recommended', icon: Cpu     },
+  { id: 'rf',      label: 'Random Forest', accuracy: '80.18%',   desc: 'Fast · interpretable',           icon: TreePine },
+  { id: 'cnn',     label: 'CNN (1D)',      accuracy: 'Training…',desc: 'Deep learning · wav2vec2',       icon: Network  },
 ]
 
 export default function RecordAudio() {
