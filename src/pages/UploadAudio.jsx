@@ -88,7 +88,8 @@ export default function UploadAudio() {
                 <div className="model-selector__option-icon"><Icon size={18} /></div>
                 <div className="model-selector__option-text">
                   <span className="model-selector__option-name">{label}</span>
-                  <span className="model-selector__option-meta">{accuracy} · {desc}</span>
+                  <span className="model-selector__option-acc">{accuracy}</span>
+                  <span className="model-selector__option-meta">{desc}</span>
                 </div>
               </button>
             ))}
