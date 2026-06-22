@@ -15,38 +15,52 @@ const axiosInstance = axios.create({
  * Upload an audio file for analysis.
  * Saves the result to Firestore and returns the Firestore doc ID.
  */
-export async function uploadAudio(file, firebaseUid) {
+export async function uploadAudio(file, firebaseUid, modelChoice = 'xgboost') {
   const formData = new FormData()
   formData.append('audio', file)
   formData.append('uid', firebaseUid)
+  formData.append('model', modelChoice)
 
   const response = await axiosInstance.post('/analyze/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data', 'x-firebase-uid': firebaseUid },
   })
 
-  const id = await saveAnalysis(firebaseUid, {
-    ...response.data,
-    audioFile: file.name,
-  })
+  const resultData = { ...response.data, audioFile: file.name }
 
-  return { id, status: 'success', message: 'Analysis complete' }
+  let id = 'local-' + Date.now()
+  try {
+    id = await saveAnalysis(firebaseUid, resultData)
+  } catch (e) {
+    console.warn('Firestore save failed, using local result:', e?.message)
+  }
+
+  return { id, result: resultData, status: 'success' }
 }
 
 /**
  * Submit a recorded audio blob for analysis.
  * Saves the result to Firestore and returns the Firestore doc ID.
  */
-export async function submitRecordedAudio(blob, firebaseUid) {
+export async function submitRecordedAudio(blob, firebaseUid, modelChoice = 'xgboost') {
   const formData = new FormData()
   formData.append('audio', blob, 'recording.webm')
   formData.append('uid', firebaseUid)
+  formData.append('model', modelChoice)
 
   const response = await axiosInstance.post('/analyze/record', formData, {
     headers: { 'Content-Type': 'multipart/form-data', 'x-firebase-uid': firebaseUid },
   })
 
-  const id = await saveAnalysis(firebaseUid, response.data)
-  return { id, status: 'success', message: 'Analysis complete' }
+  const resultData = response.data
+
+  let id = 'local-' + Date.now()
+  try {
+    id = await saveAnalysis(firebaseUid, resultData)
+  } catch (e) {
+    console.warn('Firestore save failed, using local result:', e?.message)
+  }
+
+  return { id, result: resultData, status: 'success' }
 }
 
 /**
@@ -63,6 +77,32 @@ export async function getSentimentResult(id, firebaseUid) {
  */
 export async function getAnalysisHistory(firebaseUid) {
   return fetchAllAnalyses(firebaseUid)
+}
+
+/**
+ * Upload audio and run ALL models simultaneously for comparison.
+ */
+export async function compareModels(file, firebaseUid) {
+  const formData = new FormData()
+  formData.append('audio', file)
+  formData.append('uid', firebaseUid)
+  const response = await axiosInstance.post('/analyze/compare', formData, {
+    headers: { 'Content-Type': 'multipart/form-data', 'x-firebase-uid': firebaseUid },
+  })
+  return response.data
+}
+
+/**
+ * Submit recorded blob and run ALL models simultaneously for comparison.
+ */
+export async function compareModelsRecord(blob, firebaseUid) {
+  const formData = new FormData()
+  formData.append('audio', blob, 'recording.webm')
+  formData.append('uid', firebaseUid)
+  const response = await axiosInstance.post('/analyze/compare/record', formData, {
+    headers: { 'Content-Type': 'multipart/form-data', 'x-firebase-uid': firebaseUid },
+  })
+  return response.data
 }
 
 /**

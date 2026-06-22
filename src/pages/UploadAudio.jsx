@@ -1,19 +1,27 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload } from 'lucide-react'
+import { Upload, Cpu, TreePine, Network, BarChart2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { uploadAudio } from '../api/api'
+import { uploadAudio, compareModels } from '../api/api'
 import AudioUploader from '../components/AudioUploader'
 import './UploadAudio.css'
+
+const MODEL_OPTIONS = [
+  { id: 'xgboost', label: 'XGBoost',       accuracy: '93.76%',   desc: 'Highest accuracy — recommended', icon: Cpu      },
+  { id: 'rf',      label: 'Random Forest', accuracy: '80.18%',   desc: 'Fast · interpretable',           icon: TreePine  },
+  { id: 'cnn',     label: 'CNN (1D)',      accuracy: '96.82%',   desc: 'Deep learning · wav2vec2',       icon: Network   },
+]
 
 export default function UploadAudio() {
   const { currentUser } = useAuth()
   const navigate = useNavigate()
 
   const [selectedFile, setSelectedFile] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [progress, setProgress] = useState(0)
+  const [loading, setLoading]     = useState(false)
+  const [comparing, setComparing] = useState(false)
+  const [error, setError]         = useState('')
+  const [progress, setProgress]   = useState(0)
+  const [modelChoice, setModelChoice] = useState('xgboost')
 
   function handleFileSelected(file) {
     setSelectedFile(file)
@@ -23,57 +31,74 @@ export default function UploadAudio() {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    if (!selectedFile) {
-      setError('Please select an audio file before submitting.')
-      return
-    }
+    if (!selectedFile) { setError('Please select an audio file before submitting.'); return }
+    setError(''); setLoading(true); setProgress(0)
 
-    setError('')
-    setLoading(true)
-    setProgress(0)
-
-    // Simulate progress animation while waiting
-    const progressInterval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 85) {
-          clearInterval(progressInterval)
-          return 85
-        }
-        return prev + 5
-      })
+    const iv = setInterval(() => {
+      setProgress(p => { if (p >= 85) { clearInterval(iv); return 85 } return p + 5 })
     }, 150)
 
     try {
-      const result = await uploadAudio(selectedFile, currentUser.uid)
-      clearInterval(progressInterval)
-      setProgress(100)
-      await new Promise((r) => setTimeout(r, 400))
-      navigate(`/result/${result.id}`, { state: { resultId: result.id } })
-    } catch {
-      clearInterval(progressInterval)
-      setProgress(0)
-      setError('Upload failed. Please check your connection and try again.')
-    } finally {
-      setLoading(false)
-    }
+      const result = await uploadAudio(selectedFile, currentUser.uid, modelChoice)
+      clearInterval(iv); setProgress(100)
+      await new Promise(r => setTimeout(r, 400))
+      navigate(`/result/${result.id}`, { state: { resultId: result.id, result: result.result } })
+    } catch (err) {
+      clearInterval(iv); setProgress(0)
+      const msg = err?.response?.data?.error || ''
+      setError(
+        err?.response?.status === 503 || msg.toLowerCase().includes('model not found')
+          ? '⏳ Model is still training — please wait and try again.'
+          : 'Upload failed. Please check your connection and try again.'
+      )
+    } finally { setLoading(false) }
+  }
+
+  async function handleCompare() {
+    if (!selectedFile) { setError('Please select an audio file first.'); return }
+    setError(''); setComparing(true)
+    try {
+      const result = await compareModels(selectedFile, currentUser.uid)
+      navigate('/compare', { state: { compareResult: result } })
+    } catch (err) {
+      setError('Comparison failed. Make sure the backend is running.')
+    } finally { setComparing(false) }
   }
 
   return (
     <div className="page-content">
       <div className="page-header">
         <h1 className="page-title">Upload Audio</h1>
-        <p className="page-subtitle">
-          Upload an audio file to analyze its sentiment using AI.
-        </p>
+        <p className="page-subtitle">Upload an audio file to analyze for depression indicators using AI.</p>
       </div>
 
       <div className="upload-page__container">
+        {/* Model selector */}
+        <div className="model-selector">
+          <p className="model-selector__label">Select Model</p>
+          <div className="model-selector__options">
+            {MODEL_OPTIONS.map(({ id, label, accuracy, desc, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                className={`model-selector__option${modelChoice === id ? ' model-selector__option--active' : ''}`}
+                onClick={() => setModelChoice(id)}
+              >
+                {modelChoice === id && <span className="model-selector__check">✓</span>}
+                <div className="model-selector__option-icon"><Icon size={18} /></div>
+                <div className="model-selector__option-text">
+                  <span className="model-selector__option-name">{label}</span>
+                  <span className="model-selector__option-acc">{accuracy}</span>
+                  <span className="model-selector__option-meta">{desc}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit} noValidate>
           <div className="upload-page__card">
-            <AudioUploader
-              onFileSelected={handleFileSelected}
-              error={!selectedFile ? error : ''}
-            />
+            <AudioUploader onFileSelected={handleFileSelected} error={!selectedFile ? error : ''} />
           </div>
 
           {loading && (
@@ -83,36 +108,27 @@ export default function UploadAudio() {
                 <span className="upload-page__progress-pct">{progress}%</span>
               </div>
               <div className="progress-track">
-                <div
-                  className="progress-bar progress-bar--animated"
-                  style={{ width: `${progress}%` }}
-                  role="progressbar"
-                  aria-valuenow={progress}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                />
+                <div className="progress-bar progress-bar--animated" style={{ width: `${progress}%` }}
+                     role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} />
               </div>
-              <p className="upload-page__progress-hint">
-                Please don't close this tab while the analysis is running.
-              </p>
+              <p className="upload-page__progress-hint">Please don't close this tab while analysis is running.</p>
             </div>
           )}
 
-          {error && selectedFile && (
-            <div className="alert alert--error" role="alert">{error}</div>
-          )}
+          {error && selectedFile && <div className="alert alert--error" role="alert">{error}</div>}
 
           <div className="upload-page__actions">
-            <button
-              type="submit"
-              className="btn btn--primary btn--large"
-              disabled={loading || !selectedFile}
-            >
-              {loading ? (
-                <><span className="loader-spinner loader-spinner--small" />Analyzing…</>
-              ) : (
-                <><Upload size={18} />Analyze Audio</>
-              )}
+            <button type="submit" className="btn btn--primary btn--large" disabled={loading || comparing || !selectedFile}>
+              {loading
+                ? <><span className="loader-spinner loader-spinner--small" />Analyzing…</>
+                : <><Upload size={18} />Analyze Audio</>}
+            </button>
+
+            <button type="button" className="btn btn--outline btn--large upload-page__compare-btn"
+                    onClick={handleCompare} disabled={loading || comparing || !selectedFile}>
+              {comparing
+                ? <><span className="loader-spinner loader-spinner--small loader-spinner--dark" />Comparing…</>
+                : <><BarChart2 size={18} />Compare All 3 Models</>}
             </button>
           </div>
         </form>

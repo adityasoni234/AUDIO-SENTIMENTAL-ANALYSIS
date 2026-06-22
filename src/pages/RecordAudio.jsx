@@ -1,82 +1,106 @@
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Send } from 'lucide-react'
+import { Send, Cpu, TreePine, Network, BarChart2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { submitRecordedAudio } from '../api/api'
+import { submitRecordedAudio, compareModelsRecord } from '../api/api'
 import AudioRecorder from '../components/AudioRecorder'
 import './RecordAudio.css'
+
+const MODEL_OPTIONS = [
+  { id: 'xgboost', label: 'XGBoost',       accuracy: '93.76%',   desc: 'Highest accuracy — recommended', icon: Cpu      },
+  { id: 'rf',      label: 'Random Forest', accuracy: '80.18%',   desc: 'Fast · interpretable',           icon: TreePine  },
+  { id: 'cnn',     label: 'CNN (1D)',      accuracy: '96.82%',   desc: 'Deep learning · wav2vec2',       icon: Network   },
+]
 
 export default function RecordAudio() {
   const { currentUser } = useAuth()
   const navigate = useNavigate()
 
   const [recordedBlob, setRecordedBlob] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [loading, setLoading]     = useState(false)
+  const [comparing, setComparing] = useState(false)
+  const [error, setError]         = useState('')
+  const [modelChoice, setModelChoice] = useState('xgboost')
 
-  const handleRecordingComplete = useCallback((blob) => {
-    setRecordedBlob(blob)
-    setError('')
-  }, [])
-
-  const handleReset = useCallback(() => {
-    setRecordedBlob(null)
-    setError('')
-  }, [])
+  const handleRecordingComplete = useCallback((blob) => { setRecordedBlob(blob); setError('') }, [])
+  const handleReset = useCallback(() => { setRecordedBlob(null); setError('') }, [])
 
   async function handleSubmit(e) {
     e.preventDefault()
-    if (!recordedBlob) {
-      setError('No recording found. Please record audio before submitting.')
-      return
-    }
-
-    setError('')
-    setLoading(true)
+    if (!recordedBlob) { setError('No recording found. Please record audio before submitting.'); return }
+    setError(''); setLoading(true)
     try {
-      const result = await submitRecordedAudio(recordedBlob, currentUser.uid)
-      navigate(`/result/${result.id}`, { state: { resultId: result.id } })
-    } catch {
-      setError('Submission failed. Please check your connection and try again.')
-    } finally {
-      setLoading(false)
-    }
+      const result = await submitRecordedAudio(recordedBlob, currentUser.uid, modelChoice)
+      navigate(`/result/${result.id}`, { state: { resultId: result.id, result: result.result } })
+    } catch (err) {
+      const msg = err?.response?.data?.error || ''
+      setError(
+        err?.response?.status === 503 || msg.toLowerCase().includes('model not found')
+          ? '⏳ Model is still training — please wait and try again.'
+          : 'Submission failed. Please check your connection and try again.'
+      )
+    } finally { setLoading(false) }
+  }
+
+  async function handleCompare() {
+    if (!recordedBlob) { setError('Please record audio first.'); return }
+    setError(''); setComparing(true)
+    try {
+      const result = await compareModelsRecord(recordedBlob, currentUser.uid)
+      navigate('/compare', { state: { compareResult: result } })
+    } catch (err) {
+      setError('Comparison failed. Make sure the backend is running.')
+    } finally { setComparing(false) }
   }
 
   return (
     <div className="page-content">
       <div className="page-header">
         <h1 className="page-title">Record Audio</h1>
-        <p className="page-subtitle">
-          Record directly from your microphone and analyze sentiment in real time.
-        </p>
+        <p className="page-subtitle">Record directly from your microphone and analyze for depression indicators.</p>
       </div>
 
       <div className="record-page__container">
-        <div className="record-page__card">
-          <AudioRecorder
-            onRecordingComplete={handleRecordingComplete}
-            onReset={handleReset}
-          />
+        {/* Model selector */}
+        <div className="model-selector">
+          <p className="model-selector__label">Select Model</p>
+          <div className="model-selector__options">
+            {MODEL_OPTIONS.map(({ id, label, accuracy, desc, icon: Icon }) => (
+              <button key={id} type="button"
+                className={`model-selector__option${modelChoice === id ? ' model-selector__option--active' : ''}`}
+                onClick={() => setModelChoice(id)}>
+                {modelChoice === id && <span className="model-selector__check">✓</span>}
+                <div className="model-selector__option-icon"><Icon size={18} /></div>
+                <div className="model-selector__option-text">
+                  <span className="model-selector__option-name">{label}</span>
+                  <span className="model-selector__option-acc">{accuracy}</span>
+                  <span className="model-selector__option-meta">{desc}</span>
+                </div>
+              </button>
+            ))}
+          </div>
         </div>
 
-        {error && (
-          <div className="alert alert--error" role="alert">{error}</div>
-        )}
+        <div className="record-page__card">
+          <AudioRecorder onRecordingComplete={handleRecordingComplete} onReset={handleReset} />
+        </div>
+
+        {error && <div className="alert alert--error" role="alert">{error}</div>}
 
         {recordedBlob && (
           <form onSubmit={handleSubmit} noValidate>
             <div className="record-page__submit">
-              <button
-                type="submit"
-                className="btn btn--primary btn--large"
-                disabled={loading}
-              >
-                {loading ? (
-                  <><span className="loader-spinner loader-spinner--small" />Analyzing…</>
-                ) : (
-                  <><Send size={18} />Submit for Analysis</>
-                )}
+              <button type="submit" className="btn btn--primary btn--large" disabled={loading || comparing}>
+                {loading
+                  ? <><span className="loader-spinner loader-spinner--small" />Analyzing…</>
+                  : <><Send size={18} />Submit for Analysis</>}
+              </button>
+
+              <button type="button" className="btn btn--outline btn--large" onClick={handleCompare}
+                      disabled={loading || comparing}>
+                {comparing
+                  ? <><span className="loader-spinner loader-spinner--small loader-spinner--dark" />Comparing…</>
+                  : <><BarChart2 size={18} />Compare All 3 Models</>}
               </button>
             </div>
           </form>

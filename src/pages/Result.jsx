@@ -1,15 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useLocation, useNavigate } from 'react-router-dom'
 import {
-  Upload,
-  History,
-  Calendar,
-  Clock,
-  HardDrive,
-  FileAudio,
-  MessageSquare,
-  Brain,
-  TrendingUp,
+  Upload, History, Calendar, Clock, HardDrive, FileAudio,
+  MessageSquare, Brain, TrendingUp,
+  Smile, Handshake, Search, CloudRain, Flame, ShieldAlert, ThumbsDown, Zap,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { getSentimentResult } from '../api/api'
@@ -17,23 +11,27 @@ import Loader from '../components/Loader'
 import './Result.css'
 
 const EMOTION_ICONS = {
-  joy: '😊',
-  trust: '🤝',
-  anticipation: '🔮',
-  sadness: '😢',
-  anger: '😠',
-  fear: '😰',
-  disgust: '🤢',
-  surprise: '😲',
+  joy:          { icon: Smile,       color: '#f59e0b' },
+  trust:        { icon: Handshake,   color: '#10b981' },
+  anticipation: { icon: Search,      color: '#8b5cf6' },
+  sadness:      { icon: CloudRain,   color: '#6366f1' },
+  anger:        { icon: Flame,       color: '#ef4444' },
+  fear:         { icon: ShieldAlert, color: '#f97316' },
+  disgust:      { icon: ThumbsDown,  color: '#84cc16' },
+  surprise:     { icon: Zap,         color: '#06b6d4' },
+}
+
+const DEPRESSION_INSIGHTS = {
+  NON_DEPRESSED:
+    'Audio indicators are consistent with a non-depressed speech pattern. Prosodic markers — pitch variability, speaking rate, and energy — fall within normal ranges. This is a screening result only; consult a clinician for a full assessment.',
+  DEPRESSED:
+    'Audio indicators suggest possible depressive patterns. Speech features such as reduced pitch variability, slower rate, and lower energy have been detected. PHQ-8 score threshold (≥ 10) exceeded. Please consult a qualified mental health professional.',
 }
 
 const SENTIMENT_INSIGHTS = {
-  POSITIVE:
-    'The audio expresses a positive, uplifting tone. This is typical of satisfied customers, motivated speakers, or enthusiastic presenters. Key emotions include joy and trust.',
-  NEGATIVE:
-    'The audio conveys negative sentiment — frustration, disappointment, or distress. Consider follow-up actions to address the concerns expressed in this recording.',
-  NEUTRAL:
-    'The audio has a balanced, neutral tone. This is common in informational speech, meeting notes, or factual presentations. No strong emotional signals detected.',
+  POSITIVE: DEPRESSION_INSIGHTS.NON_DEPRESSED,
+  NEGATIVE: DEPRESSION_INSIGHTS.DEPRESSED,
+  NEUTRAL:  'Inconclusive screening result. Audio quality or recording length may be insufficient for a confident prediction. Try a longer, clearer recording.',
 }
 
 function formatDate(isoString) {
@@ -78,26 +76,32 @@ function ConfidenceBar({ value }) {
 
 function EmotionCard({ name, value }) {
   const barRef = useRef(null)
+  const meta   = EMOTION_ICONS[name] || { icon: Brain, color: '#6366f1' }
+  const Icon   = meta.icon
 
   useEffect(() => {
     const el = barRef.current
     if (!el) return
     el.style.width = '0%'
-    const timeout = setTimeout(() => {
-      el.style.width = `${value}%`
-    }, 200)
+    const timeout = setTimeout(() => { el.style.width = `${value}%` }, 200)
     return () => clearTimeout(timeout)
   }, [value])
 
   return (
     <div className="emotion-card">
       <div className="emotion-card__header">
-        <span className="emotion-card__icon">{EMOTION_ICONS[name] || '🎭'}</span>
+        <span className="emotion-card__icon" style={{ color: meta.color }}>
+          <Icon size={20} />
+        </span>
         <span className="emotion-card__name">{name.charAt(0).toUpperCase() + name.slice(1)}</span>
         <span className="emotion-card__pct">{value}%</span>
       </div>
       <div className="progress-track emotion-card__track">
-        <div ref={barRef} className="progress-bar progress-bar--transition progress-bar--indigo" />
+        <div
+          ref={barRef}
+          className="progress-bar progress-bar--transition"
+          style={{ background: meta.color }}
+        />
       </div>
     </div>
   )
@@ -168,10 +172,15 @@ export default function Result() {
       <div className="result-page__grid">
         {/* Sentiment hero */}
         <div className="result-page__hero">
-          <p className="result-page__hero-label">Overall Sentiment</p>
+          <p className="result-page__hero-label">Depression Risk Screening</p>
           <span className={`badge badge--large ${sentimentClass(result.sentiment)}`}>
-            {result.sentiment}
+            {result.prediction || result.sentiment}
           </span>
+          {result.phq8_risk && (
+            <span className="result-page__phq-badge">
+              PHQ-8 Risk: <strong>{result.phq8_risk}</strong>
+            </span>
+          )}
           <div className="result-page__confidence">
             <div className="result-page__confidence-label">
               <TrendingUp size={15} />

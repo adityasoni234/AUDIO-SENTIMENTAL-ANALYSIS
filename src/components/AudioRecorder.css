@@ -1,106 +1,127 @@
-/* ── AudioRecorder ───────────────────────────────────────────── */
+/* ── AudioRecorder ────────────────────────────────────────────── */
 .audio-recorder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 24px;
-  padding: 32px 24px;
+  display: flex; flex-direction: column;
+  align-items: center; gap: 28px;
+  padding: 36px 28px;
 }
+
 .audio-recorder__error {
   width: 100%;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  display: flex; align-items: flex-start; gap: 10px;
   padding: 12px 16px;
   background: var(--color-danger-light);
   color: #991b1b;
   border: 1px solid #fca5a5;
   border-radius: var(--radius-md);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 14px; line-height: 1.5;
 }
+
+/* ── Stage ───────────────────────────────────────────────────── */
 .audio-recorder__stage {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
+  display: flex; flex-direction: column;
+  align-items: center; gap: 20px;
 }
+
+/* ── Mic Wrap ────────────────────────────────────────────────── */
 .audio-recorder__mic-wrap {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.audio-recorder__mic-icon {
-  width: 88px;
-  height: 88px;
-  border-radius: 50%;
-  background: var(--color-accent-light);
-  color: var(--color-accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 1;
-  transition: var(--transition);
+  display: flex; align-items: center; justify-content: center;
 }
 
-/* Pulsing animation when recording */
+/* Outer pulse rings */
+.audio-recorder__mic-wrap--pulsing::before,
+.audio-recorder__mic-wrap--pulsing::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid rgba(99,102,241,0.3);
+  animation: micRing 2s ease-out infinite;
+}
+.audio-recorder__mic-wrap--pulsing::before {
+  width: 116px; height: 116px;
+  animation-delay: 0s;
+}
+.audio-recorder__mic-wrap--pulsing::after {
+  width: 148px; height: 148px;
+  animation-delay: 0.5s;
+}
+@keyframes micRing {
+  0%   { transform: scale(0.85); opacity: 0.8; }
+  100% { transform: scale(1.2);  opacity: 0; }
+}
+
+.audio-recorder__mic-icon {
+  width: 96px; height: 96px;
+  border-radius: 50%;
+  background: var(--gradient-brand-soft);
+  color: var(--color-accent);
+  display: flex; align-items: center; justify-content: center;
+  position: relative; z-index: 1;
+  transition: var(--transition-slow);
+  box-shadow: 0 6px 24px rgba(99,102,241,0.2);
+}
+
 .audio-recorder__mic-wrap--pulsing .audio-recorder__mic-icon {
-  background: rgba(99,102,241,0.15);
-  box-shadow: 0 0 0 0 rgba(99,102,241,0.5);
-  animation: micPulse 1.4s ease-in-out infinite;
+  background: var(--gradient-brand);
+  color: #fff;
+  box-shadow: 0 0 0 0 rgba(99,102,241,0.5),
+              0 8px 32px rgba(99,102,241,0.45);
+  animation: micPulse 1.5s ease-in-out infinite;
 }
 @keyframes micPulse {
-  0%   { box-shadow: 0 0 0 0 rgba(99,102,241,0.5); }
-  50%  { box-shadow: 0 0 0 20px rgba(99,102,241,0); }
-  100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); }
+  0%   { box-shadow: 0 0 0 0 rgba(99,102,241,0.5), 0 8px 32px rgba(99,102,241,0.45); }
+  50%  { box-shadow: 0 0 0 18px rgba(99,102,241,0), 0 8px 32px rgba(99,102,241,0.45); }
+  100% { box-shadow: 0 0 0 0 rgba(99,102,241,0), 0 8px 32px rgba(99,102,241,0.45); }
 }
 
+/* ── Timer ───────────────────────────────────────────────────── */
 .audio-recorder__timer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: flex; align-items: center; gap: 10px;
 }
+
 .audio-recorder__recording-dot {
-  width: 10px;
-  height: 10px;
+  width: 10px; height: 10px;
   background: var(--color-danger);
   border-radius: 50%;
   animation: dotBlink 1s ease-in-out infinite;
   flex-shrink: 0;
+  box-shadow: 0 0 8px rgba(239,68,68,0.5);
 }
 @keyframes dotBlink {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.2; }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.2; transform: scale(0.8); }
 }
+
 .audio-recorder__time {
-  font-size: 26px;
-  font-weight: 700;
+  font-size: 30px; font-weight: 800;
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
-  letter-spacing: 2px;
+  letter-spacing: 3px;
+  font-feature-settings: "tnum";
 }
+
 .audio-recorder__status-text {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  text-align: center;
+  font-size: 14px; color: var(--color-text-secondary);
+  text-align: center; font-weight: 500;
 }
+
+/* ── Controls ────────────────────────────────────────────────── */
 .audio-recorder__controls {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  justify-content: center;
+  display: flex; gap: 12px;
+  flex-wrap: wrap; justify-content: center;
 }
+
+/* ── Playback ────────────────────────────────────────────────── */
 .audio-recorder__playback {
   width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--color-section-bg);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
 }
 .audio-recorder__playback-label {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 13px; font-weight: 600;
   color: var(--color-text-secondary);
 }
 .audio-recorder__player {
