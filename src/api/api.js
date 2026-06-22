@@ -80,6 +80,32 @@ export async function getAnalysisHistory(firebaseUid) {
 }
 
 /**
+ * Upload audio and run ALL models simultaneously for comparison.
+ */
+export async function compareModels(file, firebaseUid) {
+  const formData = new FormData()
+  formData.append('audio', file)
+  formData.append('uid', firebaseUid)
+  const response = await axiosInstance.post('/analyze/compare', formData, {
+    headers: { 'Content-Type': 'multipart/form-data', 'x-firebase-uid': firebaseUid },
+  })
+  return response.data
+}
+
+/**
+ * Submit recorded blob and run ALL models simultaneously for comparison.
+ */
+export async function compareModelsRecord(blob, firebaseUid) {
+  const formData = new FormData()
+  formData.append('audio', blob, 'recording.webm')
+  formData.append('uid', firebaseUid)
+  const response = await axiosInstance.post('/analyze/compare/record', formData, {
+    headers: { 'Content-Type': 'multipart/form-data', 'x-firebase-uid': firebaseUid },
+  })
+  return response.data
+}
+
+/**
  * Delete an analysis from Firestore.
  */
 export async function deleteAnalysis(id, firebaseUid) {

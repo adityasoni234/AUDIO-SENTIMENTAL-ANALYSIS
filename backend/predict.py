@@ -210,19 +210,15 @@ def analyze(audio_path: str, filename: str = None, model_choice: str = 'xgboost'
         confidence = round(float(proba[label]) * 100, 1)
 
     prediction = 'DEPRESSED' if label == 1 else 'NON_DEPRESSED'
-    # Map to frontend sentiment field
-    sentiment  = 'NEGATIVE' if label == 1 else 'POSITIVE'
+    sentiment  = 'NEGATIVE'  if label == 1 else 'POSITIVE'
 
-    # PHQ-8 risk tier
-    if confidence >= 80:
-        phq8_risk = 'HIGH' if label == 1 else 'LOW'
-    else:
-        phq8_risk = 'MODERATE'
+    phq8_risk, severity = _severity(label, confidence)
 
     return {
         'sentiment':   sentiment,
         'prediction':  prediction,
         'phq8_risk':   phq8_risk,
+        'severity':    severity,
         'confidence':  confidence,
         'emotions':    _compute_acoustic_emotions(clean),
         'transcript':  '',
@@ -232,4 +228,94 @@ def analyze(audio_path: str, filename: str = None, model_choice: str = 'xgboost'
         'analyzedAt':  datetime.datetime.utcnow().isoformat() + 'Z',
         'modelName':   bundle.get('model_name', 'RF+XGBoost'),
         'segments':    len(segments) if 'segments' in dir() else 1,
+    }
+
+
+def _severity(label: int, confidence: float) -> tuple:
+    """
+    Map binary prediction + confidence → PHQ-8 risk tier + severity label.
+    Mirrors PHQ-8 clinical scale:
+      Minimal (0-4) · Mild (5-9) · Moderate (10-14)
+      Moderately Severe (15-19) · Severe (20-27)
+    """
+    if label == 0:
+        if confidence >= 85:
+            return ('LOW',      'Minimal')
+        else:
+            return ('LOW',      'Mild')
+    else:
+        if confidence >= 90:
+            return ('HIGH',     'Severe')
+        elif confidence >= 80:
+            return ('HIGH',     'Moderately Severe')
+        elif confidence >= 65:
+            return ('MODERATE', 'Moderate')
+        else:
+            return ('MODERATE', 'Mild')
+
+
+def analyze_all(audio_path: str, filename: str = None) -> dict:
+    """
+    Run all available models on the same audio file.
+    Returns per-model results + an ensemble consensus + severity.
+    """
+    available = {k: v for k, v in MODELS.items() if os.path.exists(v)}
+    model_results = {}
+
+    for key in available:
+        try:
+            r = analyze(audio_path, filename=filename, model_choice=key)
+            model_results[key] = {
+                'prediction': r['prediction'],
+                'confidence': r['confidence'],
+                'severity':   r['severity'],
+                'phq8_risk':  r['phq8_risk'],
+                'modelName':  r['modelName'],
+            }
+        except Exception as e:
+            model_results[key] = {'error': str(e)}
+
+    # Ensemble: average depression probability across models
+    dep_probs = []
+    for key, r in model_results.items():
+        if 'error' in r:
+            continue
+        p = r['confidence'] / 100.0
+        dep_probs.append(p if r['prediction'] == 'DEPRESSED' else 1 - p)
+
+    if dep_probs:
+        mean_dep = float(np.mean(dep_probs))
+        ens_label      = 1 if mean_dep >= 0.4 else 0
+        ens_confidence = round(mean_dep * 100 if ens_label == 1 else (1 - mean_dep) * 100, 1)
+        ens_phq, ens_severity = _severity(ens_label, ens_confidence)
+        agreement = round(
+            sum(1 for r in model_results.values()
+                if 'error' not in r and
+                   (r['prediction'] == 'DEPRESSED') == bool(ens_label)) /
+            len([r for r in model_results.values() if 'error' not in r]) * 100
+        )
+    else:
+        ens_label, ens_confidence = 0, 0.0
+        ens_phq, ens_severity = 'LOW', 'Minimal'
+        agreement = 0
+
+    # Re-use shared audio metadata + emotions from first successful result
+    first = analyze(audio_path, filename=filename, model_choice=list(available.keys())[0])
+
+    return {
+        'models':      model_results,
+        'ensemble': {
+            'prediction':  'DEPRESSED' if ens_label == 1 else 'NON_DEPRESSED',
+            'sentiment':   'NEGATIVE'  if ens_label == 1 else 'POSITIVE',
+            'confidence':  ens_confidence,
+            'severity':    ens_severity,
+            'phq8_risk':   ens_phq,
+            'agreement':   agreement,
+        },
+        'emotions':  first['emotions'],
+        'audioFile': first['audioFile'],
+        'duration':  first['duration'],
+        'fileSize':  first['fileSize'],
+        'analyzedAt': first['analyzedAt'],
+        'segments':  first['segments'],
     }

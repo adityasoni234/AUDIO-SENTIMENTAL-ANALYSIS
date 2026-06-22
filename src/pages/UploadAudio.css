@@ -79,3 +79,9 @@
   font-weight: 700; font-size: 16px;
   line-height: 1.3; flex-shrink: 0;
 }
+
+.upload-page__actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.upload-page__compare-btn { border-color: var(--color-accent); color: var(--color-accent); }
+.upload-page__compare-btn:hover:not(:disabled) { background: var(--color-accent-light); }
+.record-page__submit { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+

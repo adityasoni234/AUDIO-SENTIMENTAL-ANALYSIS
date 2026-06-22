@@ -14,6 +14,7 @@ import Result from './pages/Result'
 import History from './pages/History'
 import Profile from './pages/Profile'
 import Settings from './pages/Settings'
+import CompareResult from './pages/CompareResult'
 import NotFound from './pages/NotFound'
 import './styles/variables.css'
 import './App.css'
@@ -70,6 +71,10 @@ export default function App() {
         <Route
           path="/settings"
           element={<DashboardLayout><Settings /></DashboardLayout>}
+        />
+        <Route
+          path="/compare"
+          element={<DashboardLayout><CompareResult /></DashboardLayout>}
         />
       </Route>
 
