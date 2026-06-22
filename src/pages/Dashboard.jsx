@@ -142,7 +142,7 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="dashboard__welcome-badges">
-          <span className="dashboard__welcome-badge"><ShieldCheck size={13} /> DAIC-WOZ Trained</span>
+          <span className="dashboard__welcome-badge"><ShieldCheck size={13} /> Extended DAIC-WOZ Trained</span>
           <span className="dashboard__welcome-badge"><TrendingUp size={13} /> PHQ-8 Screener</span>
         </div>
       </div>

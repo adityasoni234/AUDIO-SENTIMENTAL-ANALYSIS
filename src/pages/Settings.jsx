@@ -99,7 +99,7 @@ export default function Settings() {
           </div>
           <div className="settings__api-row">
             <span className="settings__api-label">Dataset</span>
-            <span className="settings__api-value">DAIC-WOZ (275 participants, PHQ-8)</span>
+            <span className="settings__api-value">Extended DAIC-WOZ (219 participants, PHQ-8)</span>
           </div>
         </div>
 
